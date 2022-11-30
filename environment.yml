@@ -1,8 +1,9 @@
 name: surgedetection
 channels:
-  - conda-forge
+- conda-forge
 dependencies:
-  - python>=3.10
-  - xdem
-  - ipython
-  - xarray
+- python>=3.10
+- xdem
+- ipython
+- xarray
+- h5netcdf

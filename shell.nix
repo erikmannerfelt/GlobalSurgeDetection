@@ -13,9 +13,9 @@ let
     profile = ''
       set -e
       eval "$(micromamba shell hook -s bash | grep -v 'complete -o')"
-      
+
       export MAMBA_ROOT_PREFIX="$(pwd)/.mamba"
-      
+
       if ! [[ -d "$MAMBA_ROOT_PREFIX/envs" ]]; then
         mkdir -p $MAMBA_ROOT_PREFIX/envs
       fi
