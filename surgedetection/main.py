@@ -10,10 +10,16 @@ import xarray as xr
 
 import surgedetection.inputs.aster
 import surgedetection.inputs
+import surgedetection.cache
 
 
-def make_glacier_stack(glims_id: str = "G014442E77835N"):
+def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
 
+    cache_path = surgedetection.cache.get_cache_name(f"glacier_stack-{glims_id}").with_suffix(".nc")
+    
+    if cache_path.is_file():
+        return xr.load_dataset(cache_path)
+    
     crs = rio.crs.CRS.from_epsg(32633)
     rgi = (
         gpd.read_file("data/rgi/rgi7/RGI2000-v7.0-G-07_svalbard_jan_mayen/RGI2000-v7.0-G-07_svalbard_jan_mayen.shp")
@@ -30,9 +36,9 @@ def make_glacier_stack(glims_id: str = "G014442E77835N"):
     for i in range(len(bounding_box)):
         bounding_box[i] -= bounding_box[i] % mod
         if i <= 1:
-            bounding_box[i] -= 2 * mod
+            bounding_box[i] -= 30 * mod
         else:
-            bounding_box[i] += 2 * mod
+            bounding_box[i] += 30 * mod
 
     shape = (int((bounding_box[3] - bounding_box[1]) / mod), int((bounding_box[2] - bounding_box[0]) / mod))
 
@@ -65,18 +71,20 @@ def make_glacier_stack(glims_id: str = "G014442E77835N"):
             attrs={"description": "The mask is true for inliers."},
         )
     ]
+    
+    sar_arrays = []
 
     aster = surgedetection.inputs.get_all_paths(crs=crs)
     for index, filepath in aster.items():
         index = dict(zip(aster.index.names, index))
 
         with rio.open(filepath) as raster:
-
+        
             window = raster.window(*bounding_box)
 
             array = np.empty(shape=shape, dtype="float32")
             rasterio.warp.reproject(
-                raster.read(1, window=window, masked=True).filled(np.nan),
+                raster.read(1, window=window, masked=True).astype("float32").filled(np.nan),
                 array,
                 src_transform=raster.window_transform(window),
                 src_crs=raster.crs,
@@ -85,6 +93,8 @@ def make_glacier_stack(glims_id: str = "G014442E77835N"):
                 dst_resolution=mod,
                 resampling=rasterio.warp.Resampling.cubic_spline,
             )
+            if np.count_nonzero(np.isfinite(array)) == 0:
+                continue
 
             descriptions = {
                 "dhdt": "dHdt-1 averages over five-year intervals. The interval is represented by (date - 5yrs, date]",
@@ -106,13 +116,27 @@ def make_glacier_stack(glims_id: str = "G014442E77835N"):
                     },
                 )
             )
-
+            
+    
+    print("Merging")
+    
+    arrs = []
+    #data = xr.Dataset()
     data = xr.merge(arrays)
+    # xr.merge is extremely memory-inefficient. Therefore, the merge is split up in chunks
+    for _ in range(len(arrays)):
+        continue
+        if len(arrs) == 20:
+            data = xr.merge([data] + arrs)
+            
+            arrs.clear()
+        arrs.append(arrays.pop(0))
+    
     data.attrs.update(attrs)
 
-    print(data)
+
+    print("Saving")
+    data.to_netcdf(cache_path)
     
-    vel = data["sar_backscatter"].dropna("time", how="all").dropna("source", how="all")
+    return data
     
-    vel.isel(time=-1, source=0).plot()
-    plt.show()

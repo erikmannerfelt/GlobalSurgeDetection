@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rasterio.crs import CRS
 from tqdm import tqdm
+import  surgedetection.cache
 
 
 def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: str) -> None:
@@ -46,11 +47,12 @@ def merge_raster_tiles(filepaths: list[str | Path], crs: int | CRS, out_path: Pa
                 filepaths_with_same_crs.append(filepath)
                 continue
 
-        filename = Path(temp_dir.name).joinpath(filepath.split("/")[-1]).with_suffix(".vrt")
+        cache_name = surgedetection.cache.get_cache_name("merge_raster_tiles", [filepath, crs, out_path]).with_suffix(".vrt") 
+        #filename = Path(temp_dir.name).joinpath(filepath.split("/")[-1]).with_suffix(".vrt")
 
-        create_warped_vrt(filepath, filename, crs.to_wkt())
+        create_warped_vrt(filepath, cache_name, crs.to_wkt())
 
-        filepaths_with_same_crs.append(filename)
+        filepaths_with_same_crs.append(cache_name)
 
     vrt_path = Path(temp_dir.name).joinpath("merged.vrt")
 

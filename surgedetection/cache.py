@@ -10,6 +10,8 @@ CACHE_DIR = Path(__file__).joinpath("../../.cache").resolve()
 def get_cache_name(
     function_name: str, args: Optional[list[Any]] = None, kwargs: Optional[dict[Any, Any]] = None
 ) -> Path:
+    # Make sure that the path will be usable
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
     arg_strs = ""
     if args is not None:
@@ -17,9 +19,9 @@ def get_cache_name(
     if kwargs is not None:
         arg_strs += "".join([str(k) + str(v) for k, v in kwargs.items()])
 
-    args_hash = "" if len(arg_strs) == 0 else hashlib.sha1(arg_strs.encode("utf-8")).hexdigest()
+    args_hash = "" if len(arg_strs) == 0 else "_" + hashlib.sha1(arg_strs.encode("utf-8")).hexdigest()
 
-    return CACHE_DIR.joinpath(function_name + "_" + args_hash).with_suffix(".pkl")
+    return CACHE_DIR.joinpath(function_name + args_hash).with_suffix(".pkl")
 
 
 def cache(func, cache_dir: Path = CACHE_DIR):
