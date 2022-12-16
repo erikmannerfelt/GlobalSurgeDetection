@@ -8,6 +8,8 @@ let
       which
       libGL
       zsh
+      yq
+      jq
     ];
 
     profile = ''
@@ -25,7 +27,23 @@ let
       # Activate the environment
       micromamba activate ${name}
 
-      micromamba install --offline -f environment.yml -y
+      # The micromamba solver is slow, so here's a faster check to see if all packages are installed
+      # Note that version bumps are not respected!
+
+      # List the dependencies in the environment.yml
+      specified_packages=`cat environment.yml | yq '.dependencies[]' -r | sed -e 's/<.*//g' -e 's/>.*//g' -e 's/=.*//g'`
+      # List the installed packages
+      installed_packages=`micromamba list --json | jq '.[].name' -r`
+
+      # Count the list of specified dependencies
+      n_specified_packages=`echo $specified_packages | wc -w`
+      # Out of the specified packages, count how many are installed
+      n_installed=`echo "$specified_packages $installed_packages" | tr ' ' '\n' | sort | uniq -d | wc -l`
+
+      # If these are not equal, something has changed and this is run again
+      if [[ "$n_installed" != "$n_specified_packages" ]]; then
+        micromamba install -f environment.yml -y
+      fi
       set +e
       zsh
     '';
