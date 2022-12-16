@@ -7,3 +7,5 @@ dependencies:
 - ipython
 - xarray
 - h5netcdf
+- odfpy  # To read odf files
+- pyarrow  # For feather support

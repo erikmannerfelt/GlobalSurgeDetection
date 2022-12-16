@@ -8,18 +8,18 @@ import rasterio.warp
 import shapely.wkb
 import xarray as xr
 
-import surgedetection.inputs.aster
-import surgedetection.inputs
 import surgedetection.cache
+import surgedetection.inputs
+import surgedetection.inputs.aster
 
 
 def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
 
     cache_path = surgedetection.cache.get_cache_name(f"glacier_stack-{glims_id}").with_suffix(".nc")
-    
+
     if cache_path.is_file():
         return xr.load_dataset(cache_path)
-    
+
     crs = rio.crs.CRS.from_epsg(32633)
     rgi = (
         gpd.read_file("data/rgi/rgi7/RGI2000-v7.0-G-07_svalbard_jan_mayen/RGI2000-v7.0-G-07_svalbard_jan_mayen.shp")
@@ -71,7 +71,7 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
             attrs={"description": "The mask is true for inliers."},
         )
     ]
-    
+
     sar_arrays = []
 
     aster = surgedetection.inputs.get_all_paths(crs=crs)
@@ -79,7 +79,7 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
         index = dict(zip(aster.index.names, index))
 
         with rio.open(filepath) as raster:
-        
+
             window = raster.window(*bounding_box)
 
             array = np.empty(shape=shape, dtype="float32")
@@ -102,7 +102,7 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
                 "ice_velocity": "Ice surface velocities averaged per year. The exact date is in the 'ice_velocity_date' variable",
                 "ice_velocity_err": "Ice surface velocity errors for the 'ice_velocity' arrays of the same date.",
                 "ice_velocity_date": "Ice surface velocity dates expressed in days.",
-                "sar_backscatter": "97.5th percentile-reduced backscatter over the winter. The date is the 'end date' of the interval.)"
+                "sar_backscatter": "97.5th percentile-reduced backscatter over the winter. The date is the 'end date' of the interval.)",
             }
 
             arrays.append(
@@ -116,27 +116,24 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
                     },
                 )
             )
-            
-    
+
     print("Merging")
-    
+
     arrs = []
-    #data = xr.Dataset()
+    # data = xr.Dataset()
     data = xr.merge(arrays)
     # xr.merge is extremely memory-inefficient. Therefore, the merge is split up in chunks
     for _ in range(len(arrays)):
         continue
         if len(arrs) == 20:
             data = xr.merge([data] + arrs)
-            
+
             arrs.clear()
         arrs.append(arrays.pop(0))
-    
-    data.attrs.update(attrs)
 
+    data.attrs.update(attrs)
 
     print("Saving")
     data.to_netcdf(cache_path)
-    
+
     return data
-    

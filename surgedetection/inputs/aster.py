@@ -24,7 +24,7 @@ def get_filepaths(tarfile_dir: Path = Path("data/hugonnet-etal-2021/"), crs: int
 
         data.append(load_tarfile(filepath, crs, pattern=r".*dhdt\.tif"))
         data.append(load_tarfile(filepath, crs, pattern=r".*dhdt_err\.tif"))
-        
+
     return pd.Series(
         data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
     ).sort_index()
