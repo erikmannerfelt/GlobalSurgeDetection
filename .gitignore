@@ -5,3 +5,4 @@ __pycache__
 zones.geojson
 .cache.old/
 manual_input/.~lock.Glacier_zones.ods#
+GIS/GlobalSurgeDetection.qgs~
