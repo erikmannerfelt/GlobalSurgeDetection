@@ -6,7 +6,7 @@ import surgedetection.cache
 from surgedetection.constants import CONSTANTS
 
 
-def read_rgi6(regions: int | list[int], data_path: str = "rgi/rgi6") -> gpd.GeoDataFrame:
+def read_rgi6(regions: int | list[int], data_path: str = "rgi/rgi6", query: str | None = None) -> gpd.GeoDataFrame:
     """
     Read RGI6 outlines for the given region(s).
 
@@ -14,6 +14,7 @@ def read_rgi6(regions: int | list[int], data_path: str = "rgi/rgi6") -> gpd.GeoD
     ---------
     regions: One or multiple RGI regions to read outlines from.
     data_path: The path (relative to the data directory) of the RGI outlines.
+    query: Optional. A query to filter the data.
 
     Returns
     -------
@@ -33,27 +34,31 @@ def read_rgi6(regions: int | list[int], data_path: str = "rgi/rgi6") -> gpd.GeoD
 
         filepath = matching[0]
         inner_filename = filepath.stem.replace("nsidc0770_", "") + ".shp"
-        region_data.append(gpd.read_file(f"/vsizip/{filepath}/{inner_filename}"))
+        data = gpd.read_file(f"/vsizip/{filepath}/{inner_filename}")
+        if query is not None:
+            data.query(query, inplace=True)
+        region_data.append(data)
 
-    return pd.concat(region_data)
+    return pd.concat(region_data, ignore_index=True)
 
 
-def read_all_rgi6(data_path: str = "rgi/rgi6") -> gpd.GeoDataFrame:
+def read_all_rgi6(data_path: str = "rgi/rgi6", query: str | None = None) -> gpd.GeoDataFrame:
     """
     Read all RGI6 outlines.
 
     Arguments
     ---------
     data_path: The path (relative to the data directory) of the RGI outlines.
+    query: Optional. A query to filter the data.
 
     Returns
     -------
     A GeoDataFrame of all RGI6 outlines.
     """
-    cache_path = surgedetection.cache.get_cache_name("rgi6", [data_path]).with_suffix(".feather")
+    cache_path = surgedetection.cache.get_cache_name("read_all_rgi6", [data_path, query]).with_suffix(".feather")
     if cache_path.is_file():
         return gpd.read_feather(cache_path)
-    rgi = pd.concat(read_rgi6(region, data_path=data_path) for region in range(1, 20))
+    rgi = pd.concat((read_rgi6(region, data_path=data_path, query=query) for region in range(1, 20)), ignore_index=True)
 
     rgi.to_feather(cache_path)
     return rgi
