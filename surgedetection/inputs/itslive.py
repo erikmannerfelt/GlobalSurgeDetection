@@ -11,7 +11,7 @@ import surgedetection.rasters
 from surgedetection.constants import CONSTANTS
 
 
-def read_files(crs: CRS, data_path: str = "/its-live") -> pd.Series:
+def read_files(crs: CRS, data_path: str = "its-live") -> pd.Series:
 
     full_data_path = CONSTANTS.data_path.joinpath(data_path)
 

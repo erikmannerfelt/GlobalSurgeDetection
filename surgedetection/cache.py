@@ -1,16 +1,45 @@
+"""Functions to handle result caching."""
 import hashlib
 import os
 import pickle
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-CACHE_DIR = Path(__file__).joinpath("../../.cache").resolve()
+CACHE_DIR = Path(__file__).parent.parent.joinpath(".cache").resolve()
 
 
-def get_cache_name(function_name: str, args: Sequence[Any] | None = None, kwargs: dict[Any, Any] | None = None) -> Path:
+def get_cache_name(
+    function_name: str,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[Any, Any] | None = None,
+    extension: str = "pkl",
+    cache_dir: Path = CACHE_DIR,
+) -> Path:
+    """
+    Retrieve a suitable and repeatable cache filename.
+
+    Arguments
+    ---------
+    function_name: The name of the function, making the start of the filename.
+    args: Arguments to derive the sha1 checksum of
+    kwargs: Keyword arguments to derive the sha1 checksum of
+    extension: The extension of the cached filepath (e.g. ".pkl" / ".txt")
+    cache_dir: The base cache directory to use.
+
+    Returns
+    -------
+    The full path to the cache filepath
+
+    Examples
+    --------
+    >>> get_cache_name("my-func", cache_dir=Path("/tmp/"))
+    PosixPath('/tmp/my-func.pkl')
+    >>> get_cache_name("my-func", args=[1, "b"], cache_dir=Path("/tmp/"))
+    PosixPath('/tmp/my-func_2d91a20a20fcaeb0ae60b5189b810bdf8481b1d7.pkl')
+    """
     # Make sure that the path will be usable
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(cache_dir, exist_ok=True)
 
     arg_strs = ""
     if args is not None:
@@ -20,16 +49,20 @@ def get_cache_name(function_name: str, args: Sequence[Any] | None = None, kwargs
 
     args_hash = "" if len(arg_strs) == 0 else "_" + hashlib.sha1(arg_strs.encode("utf-8")).hexdigest()
 
-    return CACHE_DIR.joinpath(function_name + args_hash).with_suffix(".pkl")
+    if not extension.startswith("."):
+        extension = "." + extension
+
+    return cache_dir.joinpath(function_name + args_hash).with_suffix(extension)
 
 
 def cache(func, cache_dir: Path = CACHE_DIR):  # type: ignore
     """
     Cache a given function.
 
-    :param func: The function to cache
+    Arguments
+    ---------
+    func: The function to cache
     """
-
     if not CACHE_DIR.is_dir():
         os.mkdir(CACHE_DIR)
 

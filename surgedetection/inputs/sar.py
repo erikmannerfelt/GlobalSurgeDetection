@@ -11,7 +11,7 @@ import surgedetection.rasters
 from surgedetection.constants import CONSTANTS
 
 
-def read_all_sar(crs: CRS | int, data_path: str = "/sar") -> pd.DataFrame:
+def read_all_sar(crs: CRS | int, data_path: str = "sar") -> pd.DataFrame:
     return pd.concat(
         [
             read_sentinel1(crs=crs, data_path=data_path + "/sentinel-1"),
@@ -20,7 +20,7 @@ def read_all_sar(crs: CRS | int, data_path: str = "/sar") -> pd.DataFrame:
     )
 
 
-def read_sentinel1(crs: CRS | int, data_path: str = "/sar/sentinel-1") -> pd.Series:
+def read_sentinel1(crs: CRS | int, data_path: str = "sar/sentinel-1") -> pd.Series:
     full_data_path = CONSTANTS.data_path.joinpath(data_path)
 
     if isinstance(crs, int):
@@ -54,12 +54,15 @@ def read_sentinel1(crs: CRS | int, data_path: str = "/sar/sentinel-1") -> pd.Ser
         indices.append((region, start_date, end_date, "sar_backscatter", satellite))
 
     return pd.Series(
-        data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
+        data,
+        index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"]),
+        dtype=object,
     ).sort_index()
 
 
-def read_asar_jers(crs: CRS | int, data_path: str = "/sar") -> pd.Series:
+def read_asar_jers(crs: CRS | int, data_path: str = "sar") -> pd.Series:
     full_data_path = CONSTANTS.data_path.joinpath(data_path)
+
     if isinstance(crs, int):
         crs = CRS.from_epsg(crs)
 

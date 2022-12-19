@@ -11,12 +11,12 @@ import surgedetection.rasters
 from surgedetection.constants import CONSTANTS
 
 
-def get_filepaths(tarfile_dir: str = "/hugonnet-etal-2021/", crs: int | CRS = 32633) -> pd.Series:
+def get_filepaths(tarfile_dir: str = "hugonnet-etal-2021/", crs: int | CRS = 32633) -> pd.Series:
 
     full_tarfile_dirpath = CONSTANTS.data_path.joinpath(tarfile_dir)
 
     if isinstance(crs, int):
-        crs = rio.crs.CRS.from_epsg(crs)
+        crs = CRS.from_epsg(crs)
 
     indices = []
     data = []
@@ -31,7 +31,9 @@ def get_filepaths(tarfile_dir: str = "/hugonnet-etal-2021/", crs: int | CRS = 32
         data.append(load_tarfile(filepath, crs, pattern=r".*dhdt_err\.tif"))
 
     return pd.Series(
-        data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
+        data,
+        index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"]),
+        dtype=object,
     ).sort_index()
 
 

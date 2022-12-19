@@ -1,12 +1,12 @@
 import pandas as pd
-import rasterio as rio
+from pyproj import CRS
 
 import surgedetection.inputs.aster
 import surgedetection.inputs.itslive
 import surgedetection.inputs.sar
 
 
-def get_all_paths(crs: rio.crs.CRS) -> pd.Series:
+def get_all_paths(crs: CRS) -> pd.Series:
 
     series = pd.concat(
         [
