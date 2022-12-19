@@ -1,5 +1,25 @@
 {
   "nodes": {
+    "base_env": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1,
+        "narHash": "sha256-cgMCeKgNIckhEgEjEp4WwDtG9DhMWjnHSi3/ZId0xeo=",
+        "path": "/nix/store/0chnz5y1r651z80zgyq9263x4gkwdj5j-source/modules/base_env",
+        "type": "path"
+      },
+      "original": {
+        "path": "/nix/store/0chnz5y1r651z80zgyq9263x4gkwdj5j-source/modules/base_env",
+        "type": "path"
+      }
+    },
     "flake-utils": {
       "locked": {
         "lastModified": 1667395993,
@@ -32,6 +52,7 @@
     },
     "root": {
       "inputs": {
+        "base_env": "base_env",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs"
       }
