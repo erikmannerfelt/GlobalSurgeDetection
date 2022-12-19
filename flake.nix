@@ -1,7 +1,7 @@
 {
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
-    base_env.url = "./modules/base_env";
+    base_env.url = "path:./modules/base_env";
     base_env.inputs.nixpkgs.follows = "nixpkgs";
     base_env.inputs.flake-utils.follows = "flake-utils";
     flake-utils.url = "github:numtide/flake-utils";
