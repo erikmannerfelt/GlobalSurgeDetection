@@ -10,6 +10,7 @@ let
       zsh
       yq
       jq
+      openssh
     ];
 
     profile = ''

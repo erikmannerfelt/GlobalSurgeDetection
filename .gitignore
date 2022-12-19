@@ -3,3 +3,5 @@ data/
 __pycache__
 .mamba/
 zones.geojson
+.cache.old/
+manual_input/.~lock.Glacier_zones.ods#
