@@ -1,15 +1,14 @@
 import hashlib
 import os
 import pickle
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
 CACHE_DIR = Path(__file__).joinpath("../../.cache").resolve()
 
 
-def get_cache_name(
-    function_name: str, args: Optional[list[Any]] = None, kwargs: Optional[dict[Any, Any]] = None
-) -> Path:
+def get_cache_name(function_name: str, args: Sequence[Any] | None = None, kwargs: dict[Any, Any] | None = None) -> Path:
     # Make sure that the path will be usable
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -24,7 +23,7 @@ def get_cache_name(
     return CACHE_DIR.joinpath(function_name + args_hash).with_suffix(".pkl")
 
 
-def cache(func, cache_dir: Path = CACHE_DIR):
+def cache(func, cache_dir: Path = CACHE_DIR):  # type: ignore
     """
     Cache a given function.
 
@@ -34,7 +33,7 @@ def cache(func, cache_dir: Path = CACHE_DIR):
     if not CACHE_DIR.is_dir():
         os.mkdir(CACHE_DIR)
 
-    def wrapped(*args, **kwargs):
+    def wrapped(*args, **kwargs):  # type: ignore
         cache_filename = get_cache_name(func.__name__, args, kwargs)
         if cache_filename.is_file():
             with open(cache_filename, "rb") as infile:
@@ -50,9 +49,9 @@ def cache(func, cache_dir: Path = CACHE_DIR):
     return wrapped
 
 
-def test_cache():
+def test_cache() -> None:
     @cache
-    def hello(a):
+    def hello(_a: int) -> None:
         print("there")
 
-    hello(a=1)
+    hello(_a=1)

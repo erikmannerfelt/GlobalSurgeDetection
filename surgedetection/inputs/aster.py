@@ -3,19 +3,24 @@ from pathlib import Path
 
 import pandas as pd
 import rasterio as rio
+from pyproj import CRS
 
 import surgedetection.cache
 import surgedetection.io
 import surgedetection.rasters
+from surgedetection.constants import CONSTANTS
 
 
-def get_filepaths(tarfile_dir: Path = Path("data/hugonnet-etal-2021/"), crs: int | rio.crs.CRS = 32633) -> pd.Series:
+def get_filepaths(tarfile_dir: str = "/hugonnet-etal-2021/", crs: int | CRS = 32633) -> pd.Series:
+
+    full_tarfile_dirpath = CONSTANTS.data_path.joinpath(tarfile_dir)
+
     if isinstance(crs, int):
         crs = rio.crs.CRS.from_epsg(crs)
 
     indices = []
     data = []
-    for filepath in tarfile_dir.glob("*.tar"):
+    for filepath in full_tarfile_dirpath.glob("*.tar"):
         region = filepath.stem.split("_")[0]
         start_date = pd.to_datetime(filepath.stem.split("_")[-2])
         end_date = pd.to_datetime(filepath.stem.split("_")[-1])
@@ -32,7 +37,7 @@ def get_filepaths(tarfile_dir: Path = Path("data/hugonnet-etal-2021/"), crs: int
 
 def load_tarfile(
     filepath: Path,
-    crs: rio.crs.CRS,
+    crs: CRS,
     pattern: str = r".*\.tif",
 ) -> Path:
     cache_filename = surgedetection.cache.get_cache_name("load_tarfile", args=[filepath, pattern, crs]).with_suffix(

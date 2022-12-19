@@ -47,9 +47,9 @@ repos:
   rev: v0.991
   hooks:
   - id: mypy
-    args: [--strict, --ignore-missing-imports, --allow-untyped-calls, --show-error-codes, --no-warn-unused-ignores, --disable-error-code=attr-defined, --disable-error-code=name-defined # "Name 'XXX' is not defined" occurs because of the pre-commit env.
+    args: [--strict, --ignore-missing-imports, --allow-untyped-calls, --show-error-codes, --no-warn-unused-ignores, --disable-error-code=attr-defined, --disable-error-code=name-defined] # "Name 'XXX' is not defined" occurs because of the pre-commit env.
 
-]
+
     additional_dependencies: [tokenize-rt==3.2.0]
 
 
@@ -66,7 +66,7 @@ repos:
   rev: v3.2.3
   hooks:
   - id: pyupgrade
-    args: [--py37-plus]
+    args: [--py310-plus]
 
         # Various formattings
 - repo: https://github.com/pre-commit/pygrep-hooks

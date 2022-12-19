@@ -4,28 +4,31 @@ from pathlib import Path
 
 import pandas as pd
 import rasterio as rio
+from pyproj import CRS
 
 import surgedetection.cache
 import surgedetection.rasters
+from surgedetection.constants import CONSTANTS
 
 
-def read_all_sar(crs: rio.crs.CRS | int, data_path=Path("data/sar")):
+def read_all_sar(crs: CRS | int, data_path: str = "/sar") -> pd.DataFrame:
     return pd.concat(
         [
-            read_sentinel1(crs=crs, data_path=data_path.joinpath("sentinel-1")),
+            read_sentinel1(crs=crs, data_path=data_path + "/sentinel-1"),
             read_asar_jers(crs=crs, data_path=data_path),
         ]
     )
 
 
-def read_sentinel1(crs: rio.crs.CRS | int, data_path=Path("data/sar/sentinel-1")):
+def read_sentinel1(crs: CRS | int, data_path: str = "/sar/sentinel-1") -> pd.Series:
+    full_data_path = CONSTANTS.data_path.joinpath(data_path)
 
     if isinstance(crs, int):
-        crs = rio.crs.CRS.from_epsg(crs)
+        crs = CRS.from_epsg(crs)
     indices = []
     data = []
 
-    for filepath in data_path.glob("*.tif"):
+    for filepath in full_data_path.glob("*.tif"):
         stem_split = filepath.stem.split("-")
 
         region = stem_split[0]
@@ -55,13 +58,14 @@ def read_sentinel1(crs: rio.crs.CRS | int, data_path=Path("data/sar/sentinel-1")
     ).sort_index()
 
 
-def read_asar_jers(crs: rio.crs.CRS | int, data_path=Path("data/sar")) -> pd.Series:
+def read_asar_jers(crs: CRS | int, data_path: str = "/sar") -> pd.Series:
+    full_data_path = CONSTANTS.data_path.joinpath(data_path)
     if isinstance(crs, int):
-        crs = rio.crs.CRS.from_epsg(crs)
+        crs = CRS.from_epsg(crs)
 
     indices = []
-    data = []
-    for zip_filepath in [data_path.joinpath("Svalbard_ASAR.zip"), data_path.joinpath("Svalbard_JERS.zip")]:
+    data: list[str | Path] = []
+    for zip_filepath in [full_data_path.joinpath("Svalbard_ASAR.zip"), full_data_path.joinpath("Svalbard_JERS.zip")]:
 
         for filename in zipfile.ZipFile(zip_filepath).namelist():
             if not any(

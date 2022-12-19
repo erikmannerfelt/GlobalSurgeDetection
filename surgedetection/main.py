@@ -1,3 +1,6 @@
+from collections.abc import Hashable
+from typing import Any
+
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,7 +50,7 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
         ("northing", (np.linspace(bounding_box[1] + mod / 2, bounding_box[3] - mod / 2, shape[0]))[::-1]),
         ("easting", np.linspace(bounding_box[0] + mod / 2, bounding_box[2] - mod / 2, shape[1])),
     ]
-    attrs = {
+    attrs: dict[Hashable, Any] = {
         "crs": crs.to_wkt(),
         "resolution": [mod, mod],
         "height_px": shape[0],
@@ -71,8 +74,6 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
             attrs={"description": "The mask is true for inliers."},
         )
     ]
-
-    sar_arrays = []
 
     aster = surgedetection.inputs.get_all_paths(crs=crs)
     for index, filepath in aster.items():
@@ -119,17 +120,17 @@ def make_glacier_stack(glims_id: str = "G014442E77835N") -> xr.Dataset:
 
     print("Merging")
 
-    arrs = []
+    # arrs: list[xr.DataArray] = []
     # data = xr.Dataset()
     data = xr.merge(arrays)
     # xr.merge is extremely memory-inefficient. Therefore, the merge is split up in chunks
-    for _ in range(len(arrays)):
-        continue
-        if len(arrs) == 20:
-            data = xr.merge([data] + arrs)
+    # for _ in range(len(arrays)):
+    #    continue
+    #    if len(arrs) == 20:
+    #        data = xr.merge([data] + arrs)
 
-            arrs.clear()
-        arrs.append(arrays.pop(0))
+    #        arrs.clear()
+    #     arrs.append(arrays.pop(0))
 
     data.attrs.update(attrs)
 

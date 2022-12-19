@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 
 
-def main():
+def main() -> None:
 
     import surgedetection.main
 

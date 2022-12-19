@@ -2,8 +2,9 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
-from rasterio.crs import CRS
+from pyproj import CRS
 from tqdm import tqdm
 
 import surgedetection.cache
@@ -28,7 +29,7 @@ def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: s
     del vrt
 
 
-def merge_raster_tiles(filepaths: list[str | Path], crs: int | CRS, out_path: Path) -> None:
+def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs: int | CRS, out_path: Path) -> None:
 
     if out_path.is_file():
         return
@@ -68,7 +69,7 @@ def merge_raster_tiles(filepaths: list[str | Path], crs: int | CRS, out_path: Pa
     elif out_path.suffix == ".tif":
         with tqdm(total=100, desc=f"Mosaicking {out_path.name}") as progress_bar:
 
-            def callback(status, _a, _b):
+            def callback(status: float, _a: Any, _b: Any) -> None:
                 progress_bar.update(status * 100 - progress_bar.n)
 
             gdal.Translate(
