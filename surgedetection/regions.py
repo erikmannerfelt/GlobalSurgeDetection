@@ -1,8 +1,4 @@
-import warnings
-from pathlib import Path
-
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pyproj
@@ -71,13 +67,6 @@ def generate_safe_wgs_bbox(bounds: list[float], crs: pyproj.CRS, resolution: int
     -------
     A rectangle showing the projected bounds of the provided bounding coordinates.
     """
-    # Specify the four edges of the bounding box
-    # box_edges = np.array([
-    #    [bounds[2], bounds[1]],  # lr
-    #    [bounds[2], bounds[3]],  # ur
-    #    [bounds[0], bounds[3]],  # ul
-    #    [bounds[0], bounds[1]],  # ll
-    # ])
     box = shapely.geometry.box(*bounds).exterior
 
     # The vertex interpolation works relatively, so the first part makes 97 vertices (the start plus 96 in between)
@@ -95,46 +84,20 @@ def generate_safe_wgs_bbox(bounds: list[float], crs: pyproj.CRS, resolution: int
 
     return gpd.GeoSeries([polygon], crs=crs).to_crs(4326)
 
-    return
-    xmin, ymin, xmax, ymax = bounds
-    target_crs = 4326
 
-    xmean = np.mean([xmin, xmax])
-    ymean = np.mean([ymin, ymax])
-
-    ymean, xmean = np.ravel(pyproj.Transformer.from_crs(crs, target_crs).transform([xmean], [ymean]))
-
-    data = gpd.GeoDataFrame(
-        [
-            ["ll", xmin, ymin],
-            ["ul", xmin, ymax],
-            ["ur", xmax, ymax],
-            ["lr", xmax, ymin],
-        ],
-        columns=["name", "x", "y"],
-    )
-    data["geometry"] = gpd.points_from_xy(data["x"], data["y"], crs=crs).to_crs(4326)
-
-    for i, row in data.iterrows():
-
-        lon_diff = xmean - row.geometry.x
-        if abs(lon_diff) > 90:
-            data.loc[i, "geometry"] = shapely.geometry.Point(180 if lon_diff >= 0 else -180, row.geometry.y)
-
-    return gpd.GeoSeries(
-        [shapely.geometry.Polygon(np.r_[data["geometry"].values, data["geometry"].values[0:1]].tolist())],
-        crs=target_crs,
-    )
-
-
-def make_glacier_zones(buffer: float = 5000.0, mod: float = 1000.0, area_threshold: float = 1.6) -> gpd.GeoDataFrame:
+def make_glacier_regions(buffer: float = 5000.0, mod: float = 1000.0, area_threshold: float = 1.6) -> gpd.GeoDataFrame:
     manual_entries = parse_manual_glacier_zones()  # .query("name == 'NE Russia'")
 
     rgi_o2_regions = surgedetection.inputs.rgi.read_rgi6_regions()
 
     cache_path = surgedetection.cache.get_cache_name(
-        "make_glacier_zones", [buffer, mod, area_threshold], extension="geojson"
+        "make_glacier_regions", [buffer, mod, area_threshold], extension="geojson"
     )
+
+    if cache_path.is_file():
+        zones = gpd.read_file(cache_path)
+        zones["crs"] = zones["crs_epsg"].apply(pyproj.CRS.from_epsg)
+        return zones
 
     # All glaciers with fewer than 4x4 pixels are excluded (400 * 400 m == 1.6 km²)
     rgi = surgedetection.inputs.rgi.read_all_rgi6(query=f"Area > {area_threshold}")
@@ -148,7 +111,7 @@ def make_glacier_zones(buffer: float = 5000.0, mod: float = 1000.0, area_thresho
     zones_list = []
     # rgi_outlines = {}
     for _, entry in tqdm(
-        manual_entries.iterrows(), total=manual_entries.shape[0], desc="Calculating optimal glacier zones"
+        manual_entries.iterrows(), total=manual_entries.shape[0], desc="Calculating optimal glacier regions"
     ):
 
         rgi_region_wgs84 = rgi_o2_regions[rgi_o2_regions["RGI_CODE"].isin(entry["rgi_regions"])].dissolve()
@@ -168,19 +131,50 @@ def make_glacier_zones(buffer: float = 5000.0, mod: float = 1000.0, area_thresho
             bound -= bound % mod
             bound -= buffer * (1 if i < 2 else -1)
             bounds.append(bound)
-        width = int((bounds[3] - bounds[1]) / CONSTANTS.pixel_size)
-        height = int((bounds[2] - bounds[0]) / CONSTANTS.pixel_size)
-
-        # bounding_box_wgs84 = gpd.GeoSeries([shapely.geometry.box(*bounds).segmentize(max_segment_length=10000)], crs=entry["crs"]).to_crs(4326)
+        height = int((bounds[3] - bounds[1]) / CONSTANTS.pixel_size)
+        width = int((bounds[2] - bounds[0]) / CONSTANTS.pixel_size)
 
         bounding_box_wgs84 = generate_safe_wgs_bbox(bounds, outlines.crs)
+
+        lon_vertices, lat_vertices = bounding_box_wgs84.geometry[0].exterior.xy
+
+        center_lon = round(np.mean(lon_vertices))
+        center_lat = round(np.mean(lat_vertices))
+
+        lon_width = round(np.max(lon_vertices) - np.min(lon_vertices))
+        lat_width = round(np.max(lat_vertices) - np.min(lat_vertices))
+
+        if any(val > 90 for val in (lon_width, lat_width)):
+            raise ValueError(f"Something is wrong with the box width for {entry=}: {lon_width=}, {lat_width=}")
+
+        region_id = "REG{lat_ref}{lat}{lon_ref}{lon}X{lon_width}Y{lat_width}".format(
+            lon_ref="E" if center_lon >= 0 else "W",
+            lon=str(abs(center_lon)).zfill(3),
+            lat_ref="N" if center_lat >= 0 else "S",
+            lat=str(abs(center_lat)).zfill(2),
+            lon_width=str(lon_width).zfill(2),
+            lat_width=str(lat_width).zfill(2),
+        )
+        label = (
+            region_id
+            + "-"
+            + "".join(
+                map(
+                    lambda s: s if s[0].isupper() else s.capitalize(),  # type: ignore
+                    entry["name"].replace("/", "And ").replace("&", "And").replace("  ", " ").split(" "),
+                )
+            )
+        )
 
         zones_list.append(
             {
                 "name": entry["name"],
+                "region_id": region_id,
+                "label": label,
                 "O1_regions": "/".join(map(str, entry["O1_regions"])),
                 "O2_regions": "/".join(map(str, entry["O2_regions"])),
-                "crs": entry["crs"].to_wkt(),
+                "rgi_regions": "/".join(entry["rgi_regions"]),
+                "crs_epsg": entry["crs"].to_epsg(),
                 "n_glaciers": outlines.shape[0],
                 "glacier_area": outlines["Area"].sum(),
                 "xmin_proj": bounds[0],
@@ -197,21 +191,23 @@ def make_glacier_zones(buffer: float = 5000.0, mod: float = 1000.0, area_thresho
 
     zones = gpd.GeoDataFrame(pd.DataFrame(zones_list), crs=4326)
 
+    zones["creation_date"] = pd.Timestamp.now(tz="utc").replace(microsecond=0).isoformat()
+
     non_covered_glaciers = rgi[~rgi.within(zones.dissolve().geometry[0])]
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*empty DataFrame to file.*")
+    if non_covered_glaciers.shape[0] > 0:
+        print(
+            f"Zones miss {non_covered_glaciers.shape[0]} / {rgi.shape[0]} "
+            f"glaciers above the area threshold ({area_threshold} km²)."
+        )
         non_covered_glaciers.to_file(
-            cache_path.with_stem(cache_path.stem.replace("glacier_zones", "glacier_zones-missing_glaciers")),
+            cache_path.with_stem(cache_path.stem.replace("glacier_regions", "glacier_regions-missing_glaciers")),
             driver="GeoJSON",
         )
 
-    if non_covered_glaciers.shape[0] > 0:
-        print(
-            f"Zones miss {non_covered_glaciers.shape[0]} / {rgi.shape[0]} glaciers above the area threshold ({area_threshold}"
-            " km²) "
-        )
+    zones.to_file(cache_path, driver="GeoJSON")
 
-    zones.to_file("zones.geojson", driver="GeoJSON")
+    surgedetection.cache.symlink_to_output(cache_path, "shapes/glacier_regions")
+    zones["crs"] = zones["crs_epsg"].apply(pyproj.CRS.from_epsg)
 
     return zones
 
