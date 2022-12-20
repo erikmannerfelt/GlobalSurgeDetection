@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from surgedetection.constants import CONSTANTS
+
 CACHE_DIR = Path(__file__).parent.parent.joinpath(".cache").resolve()
 
 
@@ -53,6 +55,23 @@ def get_cache_name(
         extension = "." + extension
 
     return cache_dir.joinpath(function_name + args_hash).with_suffix(extension)
+
+
+def symlink_to_output(cache_path: Path, output_name: str) -> None:
+
+    output_path = CONSTANTS.output_dir_path.joinpath(output_name)
+
+    if len(output_path.suffix) == 0:
+        output_path = output_path.with_suffix(cache_path.suffix)
+
+    os.makedirs(output_path.parent, exist_ok=True)
+
+    if output_path.is_file():
+        if output_path.is_symlink():
+            os.remove(output_path)
+        else:
+            raise ValueError(f"{output_path} is a regular file. Refusing to replace with a symlink")
+    os.symlink(cache_path, output_path)
 
 
 def cache(func, cache_dir: Path = CACHE_DIR):  # type: ignore
