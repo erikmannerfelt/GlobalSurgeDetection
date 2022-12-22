@@ -8,16 +8,16 @@ from pyproj import CRS
 
 import surgedetection.cache
 import surgedetection.rasters
+from surgedetection.rasters import RasterInput
 from surgedetection.constants import CONSTANTS
 
 
-def read_files(crs: CRS, data_path: str = "its-live") -> pd.Series:
+def read_files(crs: CRS, data_path: str = "its-live") -> list[RasterInput]:
 
     full_data_path = CONSTANTS.data_path.joinpath(data_path)
 
-    indices = []
-    data = []
 
+    rasters = []
     variables = {"v": "ice_velocity", "v_err": "ice_velocity_err", "date": "ice_velocity_date"}
     for filepath in full_data_path.glob("*.nc"):
 
@@ -35,9 +35,21 @@ def read_files(crs: CRS, data_path: str = "its-live") -> pd.Series:
 
             surgedetection.rasters.create_warped_vrt(variable_path, cache_path, out_crs=crs.to_wkt())
 
-            indices.append((region, start_date, end_date, variables[variable], "its_live"))
-            data.append(cache_path)
+            #indices.append((region, start_date, end_date, variables[variable], "its_live"))
+            #data.append(cache_path)
+            rasters.append(RasterInput(
+                source="its-live",
+                start_date=start_date,
+                end_date=end_date,
+                kind=variables[variable],
+                region=region,
+                filepath=cache_path,
+                multi_source=False,
+                multi_date=True,
+                time_prefix=variables["v"],
+            ))
 
-    return pd.Series(
-        data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
-    ).sort_index()
+    return rasters
+    #return pd.Series(
+    #    data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
+    #).sort_index()

@@ -27,3 +27,4 @@ class ConstantType:
     def __setitem__(self, key: Any, value: Any) -> None:
         """Override the Constants['key'] = value action."""
         self.raise_readonly_error(key, value)
+

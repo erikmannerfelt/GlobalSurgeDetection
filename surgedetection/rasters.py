@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
+import pandas as pd
 
 from pyproj import CRS
 from tqdm import tqdm
@@ -27,6 +28,14 @@ def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: s
 
     del ds
     del vrt
+
+
+def separate_band_vrt(filepath: Path | str, vrt_filepath: Path | str, band_nrs: list[int]) -> None:
+    from osgeo import gdal
+
+    ds = gdal.Open(str(filepath))
+    gdal.BuildVRT(str(vrt_filepath), ds, bandList=band_nrs)
+    
 
 
 def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs: int | CRS, out_path: Path) -> None:
@@ -87,3 +96,33 @@ def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs
 
     else:
         raise ValueError(f"Only 'vrt' and 'tif' suffixes are supported. Given: '{out_path.suffix}'")
+
+
+class RasterInput:
+
+    def __init__(self, source: str, start_date: pd.Timestamp, end_date: pd.Timestamp, kind: str, region: str, filepath: Path, multi_source: bool = False, multi_date: bool = False, time_prefix: str | None = None):
+        self.source = source
+        self.start_date = start_date
+        self.end_date = end_date
+        self.kind = kind
+        self.region = region 
+        self.filepath = filepath
+        self.multi_date = multi_date
+        self.multi_source = multi_source
+        self.time_prefix = time_prefix or kind
+
+    def __str__(self) -> str:
+        return "\n".join((f"RasterInput: {self.kind} from {self.source}", f"Dates: {self.start_date}-{self.end_date}", f"Region: {self.region}", f"{self.multi_date=}, {self.multi_source=}"))
+
+def make_input_series(inputs: list[RasterInput]) -> pd.Series:
+
+    indices = []
+    data = []
+    names = ["region", "start_date", "end_date", "kind", "source", "multi_date", "multi_source"] 
+    for r_input in inputs:
+        data.append(r_input.filepath)
+        indices.append([getattr(r_input, name) for name in names])
+
+    series = pd.Series(data, index=pd.MultiIndex.from_tuples(indices, names=names))
+
+    return series

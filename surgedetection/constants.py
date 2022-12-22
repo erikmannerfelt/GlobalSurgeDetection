@@ -11,6 +11,7 @@ class Constants(surgedetection.utilities.ConstantType):
     data_path: Path = Path(__file__).parent.parent.joinpath("data")
     manual_input_data_path: Path = Path(__file__).parent.parent.joinpath("manual_input")
     output_dir_path: Path = Path(__file__).parent.parent.joinpath("output")
+    days_per_year: float = 365.2425
 
 
 CONSTANTS = Constants()

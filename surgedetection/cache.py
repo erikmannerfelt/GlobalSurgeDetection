@@ -66,11 +66,11 @@ def symlink_to_output(cache_path: Path, output_name: str) -> None:
 
     os.makedirs(output_path.parent, exist_ok=True)
 
-    if output_path.is_file():
-        if output_path.is_symlink():
-            os.remove(output_path)
-        else:
-            raise ValueError(f"{output_path} is a regular file. Refusing to replace with a symlink")
+    if output_path.is_symlink():
+        os.unlink(output_path)
+
+    elif output_path.is_file():
+        raise ValueError(f"{output_path} is a regular file. Refusing to replace with a symlink")
     os.symlink(cache_path, output_path)
 
 
