@@ -1,10 +1,14 @@
+import copy
 import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
-import pandas as pd
 
+import numpy as np
+import pandas as pd
+import rasterio as rio
+from affine import Affine
 from pyproj import CRS
 from tqdm import tqdm
 
@@ -35,14 +39,12 @@ def separate_band_vrt(filepath: Path | str, vrt_filepath: Path | str, band_nrs: 
 
     ds = gdal.Open(str(filepath))
     gdal.BuildVRT(str(vrt_filepath), ds, bandList=band_nrs)
-    
 
 
 def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs: int | CRS, out_path: Path) -> None:
 
     if out_path.is_file():
         return
-    import rasterio as rio
     from osgeo import gdal
 
     temp_dir = tempfile.TemporaryDirectory()
@@ -99,26 +101,99 @@ def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs
 
 
 class RasterInput:
-
-    def __init__(self, source: str, start_date: pd.Timestamp, end_date: pd.Timestamp, kind: str, region: str, filepath: Path, multi_source: bool = False, multi_date: bool = False, time_prefix: str | None = None):
+    def __init__(
+        self,
+        source: str,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        kind: str,
+        region: str,
+        filepath: Path,
+        multi_source: bool = False,
+        multi_date: bool = False,
+        time_prefix: str | None = None,
+    ):
         self.source = source
         self.start_date = start_date
         self.end_date = end_date
         self.kind = kind
-        self.region = region 
+        self.region = region
         self.filepath = filepath
         self.multi_date = multi_date
         self.multi_source = multi_source
         self.time_prefix = time_prefix or kind
 
     def __str__(self) -> str:
-        return "\n".join((f"RasterInput: {self.kind} from {self.source}", f"Dates: {self.start_date}-{self.end_date}", f"Region: {self.region}", f"{self.multi_date=}, {self.multi_source=}"))
+        return "\n".join(
+            (
+                f"RasterInput: {self.kind} from {self.source}",
+                f"Dates: {self.start_date}-{self.end_date}",
+                f"Region: {self.region}",
+                f"{self.multi_date=}, {self.multi_source=}",
+            )
+        )
+
+
+class RasterParams:
+    def __init__(self, transform: Affine, height: int, width: int, crs: CRS):
+
+        self.transform = transform
+        self.height = height
+        self.width = width
+        self.crs = crs
+
+    @staticmethod
+    def from_bounds(bounding_box: list[float], height: int, width: int, crs: CRS):
+        transform = rio.transform.from_bounds(*bounding_box, width, height)
+        return RasterParams(transform=transform, height=height, width=width, crs=crs)
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def shape(self) -> tuple[int, int]:
+        return (self.height, self.width)
+
+    def bounding_box(self) -> tuple[float, float, float, float]:
+        bounds = rio.transform.array_bounds(self.height, self.width, self.transform)
+        return (bounds[0], bounds[1], bounds[2], bounds[3])
+
+    def resolution(self) -> tuple[float, float]:
+        return (self.transform[0], -self.transform[4])
+
+    def xres(self) -> float:
+        return self.resolution()[0]
+
+    def yres(self) -> float:
+        return self.resolution()[1]
+
+    def xarray_coords(self) -> list[tuple[str, np.ndarray[np.float64]]]:
+
+        bounds = self.bounding_box()
+        res = self.resolution()
+
+        coords = [
+            (
+                "y",
+                np.linspace(bounds[1] + res[1] / 2, bounds[3] - res[1] / 2, self.height(), dtype="float64")[::-1],
+            ),
+            (
+                "x",
+                np.linspace(
+                    bounds[0] + res[0] / 2,
+                    bounds[2] - res[0] / 2,
+                    self.width(),
+                    dtype="float64",
+                ),
+            ),
+        ]
+        return coords
+
 
 def make_input_series(inputs: list[RasterInput]) -> pd.Series:
 
     indices = []
     data = []
-    names = ["region", "start_date", "end_date", "kind", "source", "multi_date", "multi_source"] 
+    names = ["region", "start_date", "end_date", "kind", "source", "multi_date", "multi_source"]
     for r_input in inputs:
         data.append(r_input.filepath)
         indices.append([getattr(r_input, name) for name in names])
