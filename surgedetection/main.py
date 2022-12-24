@@ -79,7 +79,7 @@ def process_raster(
     ):
         array = orig
     else:
-        array = np.empty(shape=raster_params.shape, dtype=src_dtype)
+        array = np.empty(shape=raster_params.shape(), dtype=src_dtype)
         rasterio.warp.reproject(
             orig,
             array,
@@ -155,6 +155,7 @@ def make_region_stack(
         ["name", "region_id", "label", "rgi_regions", "n_glaciers", "glacier_area", "height_px", "width_px", "crs_epsg"]
     ].to_dict()
 
+
     # The base dataset contains everything except the rasters which are iteratively appended later.
     base = xr.Dataset(
         {
@@ -162,7 +163,7 @@ def make_region_stack(
             "rgi_rasterized": xr.DataArray(
                 rasterio.features.rasterize(
                     zip(rgi.geometry, rgi.index),
-                    out_shape=raster_params.shape,
+                    out_shape=raster_params.shape(),
                     transform=raster_params.transform,
                 ),
                 coords=spatial_coords,
@@ -195,13 +196,8 @@ def make_region_stack(
 
         # Read all raster inputs, which will iteratively be converted to nc's with correct bounds
         raster_inputs = surgedetection.inputs.get_all_rasters(crs=region["crs"])
-        # raster_inputs = raster_inputs[:5]
+        #raster_inputs = raster_inputs[:5]
 
-        # For each temporal variable, it will be combined with all other temporal variables along the time
-        # dimension. To quickly subset one variable, one must then have to load it to filter out which time
-        # coordinates are present. This time dict allows setting what time coords exist for each variable
-        # as an attr, which can speed up reading it later.
-        times: dict[str, list[pd.Timestamp]] = {}
         with tqdm(total=len(raster_inputs), desc="Reprojecting datasets") as progress_bar:
             for raster_input in raster_inputs:
                 result = process_raster(
@@ -214,52 +210,58 @@ def make_region_stack(
                 if result is not None:
                     filepaths.append(result)
 
-        chunks = {"x": 256, "y": 256, "time": 1, "source": 1, "rgi_id": 1}
+        chunks = {"x": 256, "y": 256, "time": 1}
 
-        # with dask.config.set({"array.slicing.split_large_chunks": True}):
-        data = xr.open_mfdataset(filepaths, chunks=chunks, parallel=True)
-        # Avoid complaining about this being an object array
-        for coord in ["source", "rgi_id"]:
-            if coord in data.coords:
-                data.coords[coord] = data.coords[coord].astype(str)
-        data.attrs = attrs
+        with dask.config.set({"array.slicing.split_large_chunks": True}):
+            data = xr.open_mfdataset(filepaths, chunks="auto", parallel=True)
+            # Avoid complaining about this being an object array
+            for coord in ["source", "rgi_id"]:
+                if coord in data.coords:
+                    data.coords[coord] = data.coords[coord].astype(str)
+            data.attrs = attrs
 
-        for variable in [v for v in data.data_vars if "time" in data[v].dims]:
-            data[variable].attrs["times"] = np.unique(times[variable]["time"].dropna().values)
+            # For each temporal variable, it will be combined with all other temporal variables along the time
+            # dimension. To quickly subset one variable, one must then have to load it to filter out which time
+            # coordinates are present. This time dict allows setting what time coords exist for each variable
+            # as an attr, which can speed up reading it later.
+            for variable in [v for v in data.data_vars if "time" in data[v].dims]:
+                data[variable].attrs["times"] = np.unique(data[variable]["time"].dropna("time").values)
 
-        for variable in RASTER_DESCRIPTIONS:
-            if variable not in data.data_vars:
-                continue
-            data[variable].attrs["description"] = RASTER_DESCRIPTIONS[variable]
+            for variable in RASTER_DESCRIPTIONS:
+                if variable not in data.data_vars:
+                    continue
+                data[variable].attrs["description"] = RASTER_DESCRIPTIONS[variable]
 
-        for variable in data.data_vars:
-            if not all(d in data[variable].dims for d in ("x", "y")):
-                continue
+            for variable in data.data_vars:
+                if not all(d in data[variable].dims for d in ("x", "y")):
+                    continue
 
-            data[variable].attrs.update(
-                {
-                    "GDAL_AREA_OR_POINT": "Area",
-                    "_CRS": {"wkt": str(region["crs"].to_wkt())},
+                data[variable].attrs.update(
+                    {
+                        "GDAL_AREA_OR_POINT": "Area",
+                        "_CRS": {"wkt": str(region["crs"].to_wkt())},
+                    }
+                )
+
+            for dim in ["x", "y"]:
+                data[dim].attrs = {
+                    "units": "m",
+                    "standard_name": f"projection_{dim}_coordinate",
+                    "long_name": "Easting" if dim == "x" else "Northing",
                 }
+
+            data.attrs["creation_date"] = surgedetection.utilities.now_str()
+
+            compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
+
+            task = data.chunk(chunks).to_zarr(
+                cache_path, mode="w", encoding={v: {"compressor": compressor} for v in data.variables}, compute=False
             )
+            with TqdmCallback(desc=f"Writing region {region['label']}"):
+                task.compute()
 
-        for dim in ["x", "y"]:
-            data[dim].attrs = {
-                "units": "m",
-                "standard_name": f"projection_{dim}_coordinate",
-                "long_name": "Easting" if dim == "x" else "Northing",
-            }
-
-        data.attrs["creation_date"] = surgedetection.utilities.now_str()
-
-        compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
-
-        task = data.to_zarr(
-            cache_path, mode="w", encoding={v: {"compressor": compressor} for v in data.variables}, compute=False
-        )
-        with TqdmCallback(desc="Writing region {region['label']}"):
-            task.compute()
+        del data
 
     surgedetection.cache.symlink_to_output(cache_path, f"raw_region_stacks/{region['label']}")
 
-    return data
+    return xr.open_zarr(cache_path)

@@ -15,8 +15,8 @@ from surgedetection.constants import CONSTANTS
 
 def read_all_sar(crs: CRS | int, data_path: str = "sar") -> list[RasterInput]:
     return (
-        read_sentinel1_diff(crs=crs, data_path=data_path + "/sentinel-1-diff") + 
-        read_asar_jers(crs=crs, data_path=data_path)
+        read_sentinel1_diff(crs=crs, data_path=data_path + "/sentinel-1-diff")# + 
+        #read_asar_jers(crs=crs, data_path=data_path)
         #read_sentinel1(crs=crs, data_path=data_path + "/sentinel-1") + 
     )
 

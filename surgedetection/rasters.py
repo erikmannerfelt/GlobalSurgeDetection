@@ -174,14 +174,14 @@ class RasterParams:
         coords = [
             (
                 "y",
-                np.linspace(bounds[1] + res[1] / 2, bounds[3] - res[1] / 2, self.height(), dtype="float64")[::-1],
+                np.linspace(bounds[1] + res[1] / 2, bounds[3] - res[1] / 2, self.height, dtype="float64")[::-1],
             ),
             (
                 "x",
                 np.linspace(
                     bounds[0] + res[0] / 2,
                     bounds[2] - res[0] / 2,
-                    self.width(),
+                    self.width,
                     dtype="float64",
                 ),
             ),

@@ -32,15 +32,19 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     if (not force_redo) and cache_filepath.is_dir():
         return xr.open_zarr(cache_filepath)
 
+    warnings.simplefilter("error")
+
+    # Create or load the raw region stack
     stack = surgedetection.main.make_region_stack(region_id)
 
+    # Format the output attrs. For some reason, they disappear below, so they have to be reintroduced
     attrs = stack.attrs.copy()
     if "creation_date" in attrs:
         attrs["source_creation_date"] = attrs["creation_date"]
-
     attrs["creation_date"] = surgedetection.utilities.now_str()
     var_attrs = {v: stack[v].attrs.copy() for v in stack.data_vars}
 
+    # Subsetting for testing purposes
     if False:
         locations = {"scheele": "RGI60-07.00283", "monaco": "RGI60-07.01494"}
         rgi_id = locations["monaco"]
@@ -48,20 +52,35 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
         # Temporary to try things out
         stack = stack.sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
 
-    vars_with_time = [v for v in stack.variables if "time" in stack[v].dims and v != "time"]
+    # Average all variables by year. All as of 2022-12-24 consist of just one sample per year
+    # so this in reality is just a simpliciation of the time dimension.
+    vars_with_time = [v for v in stack.data_vars if "time" in stack[v].dims]
     stack[vars_with_time] = stack[vars_with_time].groupby("time.year").mean().squeeze()
 
-    stack["sar_backscatter_diff"] = stack["sar_backscatter_diff"].mean("source")
-    stack["sar_backscatter"] = stack["sar_backscatter"].mean("source")
+    # Remove the source dimension by averaging for each x/y/year step
+    for variable in [v for v in stack.data_vars if "source" in stack[v].dims]:
+        stack[variable] = stack[variable].mean("source")
+
+    # Source and time (replaced by year) are now empty, so they can be dropped
     stack = stack.drop_dims(["source", "time"])
 
+    # Generate a glacier mask (True on glaciers)
     stack["glacier_mask"] = stack["rgi_rasterized"] > 0
+
+    # Generate a margin mask by extracting the intersection between the glacier mask and the 
+    # an eroded glacier mask (or rather dilated non-glacier mask)
     stack["margin_mask"] = (
         stack["glacier_mask"] & skimage.morphology.binary_dilation(~stack["glacier_mask"], footprint=np.ones((3, 3)))
     ).compute()
 
+    # The DEM and rgi_rasterized arrays need to be loaded for the quantile calculation either way, so this
+    # simplifies the syntax slightly. TODO: Make sure this is actually true
     stack["dem"].load()
     stack["rgi_rasterized"].load()
+    # Calculate quantiles of elevation for each rgi index
+    # TODO: Speed it up by not calculating the quantile for the non-glacier value (0)
+    # Problem is then the .sel call below fails because 0 is missing. I tried adding method="nearest" to .sel, but that
+    # is slower than just calculating the non-glacier quantile...
     for_quantiles = stack[["dem", "rgi_rasterized"]].stack(xy={"x", "y"}).swap_dims(xy="rgi_rasterized")
     quantiles = (
         for_quantiles["dem"]
@@ -70,13 +89,17 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
         .sel(rgi_rasterized=stack["rgi_rasterized"])
     )
 
+    # Generate a terminus mask; True for all locations in the lower third of each individual glacier
     stack["terminus_mask"] = stack["glacier_mask"] & (stack["dem"] <= quantiles.sel(quantile=0.33)).reset_coords(
         drop=True
     )
+
+    # Generate a terminus mask; True for all locations in the upper third of each individual glacier
     stack["accumulation_mask"] = stack["glacier_mask"] & (stack["dem"] >= quantiles.sel(quantile=0.67)).reset_coords(
         drop=True
     )
 
+    # Assign parameters for the output file
     chunks = {"x": 256, "y": 256, "year": 1}
     compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
     save_params = {v: {"compressor": compressor} for v in stack.variables}
@@ -84,25 +107,27 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     if cache_filepath.is_dir():
         shutil.rmtree(cache_filepath)
 
+    # Reintroduce the attrs that were mysteriously lost along the way
     stack.attrs = attrs
     for variable in var_attrs:
         stack[variable].attrs = var_attrs[variable]
 
+    # Calculate the array so far. Next up, only vars are added, so they can safely be appended
     task = stack.chunk(chunks).to_zarr(cache_filepath, compute=False, encoding=save_params)
-
-    with TqdmCallback(desc=f"A: Computing region {region_id}"):
+    with TqdmCallback(desc=f"A: Computing region {attrs['label']}"):
         task.compute()
 
+    # Make sure everything is loaded from disk now instead
     stack = xr.open_zarr(cache_filepath)
-
+    # Calculate acceleration columns (technically velocity, but it's velocities of velocities!)
     for key in tqdm(["ice_velocity", "dhdt"], desc="B: Calculating acceleration variables"):
         new_var_name = f"{key}2"
         new_err_name = f"{new_var_name}_err"
 
-        # times = np.array(stack[key].attrs["times"], dtype="datetime64[ns]")
+        # The full data will be riddled with empty time frames, which only creates nans in the diff
+        # So, only the slices with data are used to calculate accelerations.
         subset = stack[[key, f"{key}_err"]].dropna("year", "all")
 
-        # subset = stack[[key, f"{key}_err"]].sel(time=times)
         time_diffs = subset["year"].diff("year")
 
         new_vars = xr.merge(
@@ -123,8 +148,10 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
                 .astype(stack[f"{key}_err"].dtype),
             ]
         )
+        # It seems like each to_zarr call removes the top-level attributes. This reintroduces them each time
         new_vars.attrs = stack.attrs.copy()
 
+        # Copy the attrs of the velocity to the acceleration column
         for old_key, new_key in [(key, new_var_name), (f"{key}_err", new_err_name)]:
             new_vars[new_key].attrs = subset[old_key].attrs.copy()
 
@@ -136,7 +163,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     return xr.open_zarr(cache_filepath)
 
 
-def main(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, save_chunk_size: int = 100):
+def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, save_chunk_size: int = 100):
 
     cache_path = surgedetection.cache.get_cache_name(f"aggregate_region-{region_id}", extension=".nc")
 

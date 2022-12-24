@@ -61,6 +61,7 @@ in
   xdem
   gdal
   graphviz
+  zarr
 ]
 )).overrideAttrs (prev: {
   pname = "python";
