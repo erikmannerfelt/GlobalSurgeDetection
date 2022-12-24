@@ -9,10 +9,11 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        packages = builtins.listToAttrs (map (pkg: { name = pkg.pname; value = pkg; }) ([
+        packages = builtins.listToAttrs (map (pkg: { name = pkg.pname; value = pkg; }) ( with pkgs; [
           (import ./python.nix { inherit pkgs; })
           pkgs.pre-commit
           pkgs.zsh
+          graphviz
         ]));
 
       in

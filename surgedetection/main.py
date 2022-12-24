@@ -347,9 +347,9 @@ def make_region_stack(region_id: str = "REGN79E021X24Y05", n_threads: int | None
     with dask.config.set({"array.slicing.split_large_chunks": True}):
         data = xr.open_mfdataset(filepaths)
         def chunk_size(dim: str):
-            if dim in ["x", "y", "rgi_id"]:
+            if dim in ["x", "y"]:
                 return 256
-            if dim in ["time", "source"]:
+            if dim in ["time", "source", "rgi_id"]:
                 return 1
             return -1
         data = data.chunk({c: chunk_size(c) for c in data.dims})
@@ -399,6 +399,6 @@ def make_region_stack(region_id: str = "REGN79E021X24Y05", n_threads: int | None
         data.to_zarr(cache_path, mode="w", encoding=save_params)
         #data.to_netcdf(cache_path, encoding=save_params)
 
-    surgedetection.cache.symlink_to_output(cache_path, f"region_stacks/{region['label']}")
+    surgedetection.cache.symlink_to_output(cache_path, f"raw_region_stacks/{region['label']}")
 
     return data

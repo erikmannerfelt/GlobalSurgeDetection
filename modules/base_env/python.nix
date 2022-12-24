@@ -60,6 +60,7 @@ in
   rasterio
   xdem
   gdal
+  graphviz
 ]
 )).overrideAttrs (prev: {
   pname = "python";

@@ -1,4 +1,5 @@
 from typing import Any
+import datetime
 
 
 class ConstantType:
@@ -28,3 +29,5 @@ class ConstantType:
         """Override the Constants['key'] = value action."""
         self.raise_readonly_error(key, value)
 
+def now_str() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
