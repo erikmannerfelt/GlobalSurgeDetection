@@ -10,3 +10,4 @@ gdal
 graphviz
 zarr
 mypy
+requests

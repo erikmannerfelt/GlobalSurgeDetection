@@ -143,11 +143,11 @@ class RasterParams:
         self.crs = crs
 
     @staticmethod
-    def from_bounds(bounding_box: list[float], height: int, width: int, crs: CRS):
+    def from_bounds(bounding_box: list[float], height: int, width: int, crs: CRS):  # type: ignore
         transform = rio.transform.from_bounds(*bounding_box, width, height)
         return RasterParams(transform=transform, height=height, width=width, crs=crs)
 
-    def copy(self):
+    def copy(self):  # type: ignore
         return copy.deepcopy(self)
 
     def shape(self) -> tuple[int, int]:
@@ -166,7 +166,7 @@ class RasterParams:
     def yres(self) -> float:
         return self.resolution()[1]
 
-    def xarray_coords(self) -> list[tuple[str, np.ndarray[np.float64]]]:
+    def xarray_coords(self) -> list[tuple[str, np.typing.NDArray[np.float64]]]:
 
         bounds = self.bounding_box()
         res = self.resolution()
