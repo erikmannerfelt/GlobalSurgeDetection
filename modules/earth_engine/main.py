@@ -320,7 +320,7 @@ def main(max_concurrent_processes: int = 10) -> None:
 
     downloaded_names = get_current_rasters()
 
-    print(f"Found {len(downloaded_names)} (out of {len(all_sar_names)} downloaded files")
+    print(f"Found {len(downloaded_names)} (out of {len(all_sar_names)}) downloaded files")
 
     non_downloaded_names = diff_list(all_sar_names, downloaded_names)
 

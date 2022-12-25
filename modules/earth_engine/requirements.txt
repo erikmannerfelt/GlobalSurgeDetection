@@ -1,0 +1,9 @@
+earthengine-api
+folium
+ipython
+pydrive2
+geopandas
+rasterio
+tqdm
+pandas
+pyarrow

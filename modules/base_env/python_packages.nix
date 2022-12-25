@@ -45,24 +45,24 @@ let
         ];
         setuptoolsCheckPhase = "true";
       };
+      earthengine-api = super.buildPythonPackage rec {
+        pname = "earthengine-api";
+        version = "0.1.335";
+        src = super.fetchPypi {
+          inherit pname version;
+          sha256 = "lix2x2Dofn5ZB/aZYJjz4f+pLw2eGCq8A4OtVPDCud0=";
+        };
+        propagatedBuildInputs = with super; [
+          numpy
+          google-cloud-storage
+          google-api-python-client
+          future
+        ];
+        setuptoolsCheckPhase = "true";
+      };
     };
   };
 
 
 in
-(pythonpkgs.python.withPackages (_: with pythonpkgs; [
-  ipython
-  xarray
-  h5netcdf
-  odfpy
-  pyarrow
-  pytest
-  rasterio
-  xdem
-  gdal
-  graphviz
-  zarr
-]
-)).overrideAttrs (prev: {
-  pname = "python";
-})
+pythonpkgs

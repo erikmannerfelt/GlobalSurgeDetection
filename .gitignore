@@ -7,3 +7,5 @@ zones.geojson
 manual_input/.~lock.Glacier_zones.ods#
 GIS/GlobalSurgeDetection.qgs~
 output/
+modules/earth_engine/credentials.json
+modules/earth_engine/client_secrets.json

@@ -9,12 +9,27 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        packages = builtins.listToAttrs (map (pkg: { name = pkg.pname; value = pkg; }) ( with pkgs; [
-          (import ./python.nix { inherit pkgs; })
-          pkgs.pre-commit
-          pkgs.zsh
-          graphviz
-        ]));
+        python_packages = import ./python_packages.nix { inherit pkgs; };
+        python_from_requirements = requirements_path: (
+          let
+            raw_requirements = (pkgs.lib.splitString "\n" (pkgs.lib.readFile requirements_path));
+            requirements = builtins.map (s: builtins.replaceStrings [ " " ] [ "" ] s) (builtins.filter (s: (builtins.stringLength s) > 1) raw_requirements);
+          in
+          python_packages.python.withPackages (_: map (req: (builtins.getAttr req python_packages)) requirements)
+        );
+
+        python = python_from_requirements ../../requirements.txt;
+
+        packages = pkgs.lib.attrsets.recursiveUpdate
+          (builtins.listToAttrs (map (pkg: { name = pkg.pname; value = pkg; }) (with pkgs; [
+            pre-commit
+            zsh
+            graphviz
+          ])))
+          {
+            inherit python python_from_requirements python_packages;
+          };
+
 
       in
       {
