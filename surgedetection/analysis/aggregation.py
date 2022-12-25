@@ -67,7 +67,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     # Generate a glacier mask (True on glaciers)
     stack["glacier_mask"] = stack["rgi_rasterized"] > 0
 
-    # Generate a margin mask by extracting the intersection between the glacier mask and the 
+    # Generate a margin mask by extracting the intersection between the glacier mask and the
     # an eroded glacier mask (or rather dilated non-glacier mask)
     stack["margin_mask"] = (
         stack["glacier_mask"] & skimage.morphology.binary_dilation(~stack["glacier_mask"], footprint=np.ones((3, 3)))
@@ -177,7 +177,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         attrs["source_creation_date"] = attrs["creation_date"]
 
     rgi_ids = stack["rgi_index"].to_series().sort_index()
-    rgi_ids = pd.Series(rgi_ids.index.values, index=rgi_ids.values).astype("string")
+    rgi_ids = pd.Series(rgi_ids.index.values, index=rgi_ids.values).drop_duplicates().astype("string")
     # rgi_ids.name = "rgi_rasterized"
 
     warnings.simplefilter("error")
@@ -190,63 +190,84 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         # Temporary to try things out
         stack = stack.sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
 
-    stack = stack.drop_vars(["rgi_id", "rgi_index", "bboxes", "coordinate"])
+    stack = stack.drop_vars(["bboxes", "coordinate", "rgi_id", "rgi_index"])
 
     stack = stack.stack(xy=["x", "y"]).swap_dims({"xy": "rgi_rasterized"}).reset_coords(drop=True)
     stack = stack.where(stack["rgi_rasterized"] > 0, drop=True)
 
-    err_cols = [v for v in stack.variables if "_err" in v]
-    count_cols = [v.replace("_err", "_count") for v in err_cols]
-    scopes = [v for v in stack.variables if "_mask" in v]
-
     if cache_path.is_file():
         os.remove(cache_path)
         # shutil.rmtree(cache_path)
+    os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
 
-    n = np.unique(stack["rgi_rasterized"].values).shape[0]
-    n_stacks = int(np.ceil(n / save_chunk_size))
-    first = True
-    # compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
-    aggs = []
-    with tqdm(
-        total=n_stacks, desc=f"Processing glaciers in chunks of {save_chunk_size}"
-    ) as progress_bar, tempfile.TemporaryDirectory() as temp_dir:
+        if True:
+            for variable in stack.variables:
+                stack[variable].attrs.clear()
+                stack[variable].encoding.update(compressor=zarr.Blosc(cname="zstd", clevel=3, shuffle=2))
+            stack_path = temp_dir_path.joinpath("stack.zarr")
+            task = stack.chunk({"rgi_rasterized": 256**2, "year": 10}).to_zarr(stack_path, compute=False)
 
-        temp_filename = Path(temp_dir).joinpath("arr.zarr")
-        for i, (rgi_index, per_rgi) in enumerate(stack.groupby("rgi_rasterized")):
-            per_scope = []
-            # per_rgi = per_rgi.compute()  # For some reason, this makes it all faster
+            with TqdmCallback(desc="Saving intermediate values"):
+                task.compute()
+
+            stack = xr.open_zarr(stack_path)
+
+        err_cols = [v for v in stack.data_vars if "_err" in v]
+        count_cols = [v.replace("_err", "_count") for v in err_cols]
+        scopes = [v for v in stack.data_vars if "_mask" in v]
+
+        files = []
+
+        with tqdm(total=len(scopes)) as progress_bar:
             for scope in scopes:
-                filtered = per_rgi.where(per_rgi[scope])
-                scoped_agg = filtered.mean("rgi_rasterized").drop_vars(scopes)
-                pixel_counts = filtered[err_cols].notnull().sum("rgi_rasterized")
+                start_time = time.time()
+                filename = Path(temp_dir).joinpath(f"{scope}.zarr")
+                progress_bar.desc = f"{scope}: Starting +{time.time() - start_time:.1f} s"
+                progress_bar.update(0)
+                filtered = stack if scope == "glacier_mask" else stack.where(stack[scope])
+                progress_bar.desc = f"{scope}: Filtered +{time.time() - start_time:.1f} s"
+                progress_bar.update(0)
+                scoped_agg = filtered.groupby("rgi_rasterized").mean("rgi_rasterized").drop_vars(scopes)
+                progress_bar.desc = f"{scope}: Grouped1 +{time.time() - start_time:.1f} s"
+                progress_bar.update(0)
+
+                pixel_counts = filtered[err_cols].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
+                progress_bar.desc = f"{scope}: Grouped2 +{time.time() - start_time:.1f} s"
+                progress_bar.update(0)
                 scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))
 
-                per_scope.append(scoped_agg.expand_dims({"scope": np.array([scope], dtype=str)}))
+                progress_bar.desc = f"{scope}: To netcdf +{time.time() - start_time:.1f} s"
+                progress_bar.update(0)
+                task = scoped_agg.expand_dims({"scope": np.array([scope], dtype=str)}).to_zarr(filename)
+                # with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
 
-            aggs.append(
-                xr.concat(per_scope, "scope").expand_dims({"rgi_id": np.array([rgi_ids[rgi_index]], dtype=str)})
-            )
-            if len(aggs) >= save_chunk_size or i == (n - 1):
-                # save_params = {v: {"compressor": compressor} for v in aggs[0].data_vars}
-                if first:
-                    zarr_args = {}  # {"encoding": save_params}
-                else:
-                    zarr_args = {"mode": "a", "append_dim": "rgi_id"}
-                xr.concat(aggs, "rgi_id").to_zarr(temp_filename, **zarr_args)
+                progress_bar.desc = f"{scope}: Done +{time.time() - start_time:.1f} s"
+                files.append(filename)
                 progress_bar.update()
-                aggs.clear()
-                first = False
+        stack.close()
 
-        output = xr.open_zarr(temp_filename)
-
-        for variable in output.data_vars:
-            output[variable].encoding.update(zlib=True, complevel=5)
+        aggs = xr.open_mfdataset(files, concat_dim="scope", combine="nested", engine="zarr")
+        aggs["rgi_rasterized"] = rgi_ids.loc[aggs["rgi_rasterized"].values].values
+        aggs["rgi_rasterized"] = aggs["rgi_rasterized"].astype(str)
+        aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope")
 
         attrs["creation_date"] = surgedetection.utilities.now_str()
-        output.attrs = attrs.copy()
+        aggs.attrs = attrs.copy()
+        # with tqdm(total=rgi_ids.shape[0], desc="Generating dask jobs") as progress_bar:
+        #    agg = stack.groupby("rgi_rasterized").map(aggregate_glacier, rgi_ids=rgi_ids, progress_bar=progress_bar)
+        for variable in aggs.data_vars:
+            aggs[variable].encoding.update(zlib=True, complevel=5)
 
-        output.to_netcdf(cache_path)
+        os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+        task = aggs.to_netcdf(cache_path, compute=False)
+        with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
+            task.compute()
+
+        agg.close()
+        scoped_agg.close()
+        filtered.close()
 
     surgedetection.cache.symlink_to_output(cache_path, f"region_aggregates/{attrs['label']}")
 
