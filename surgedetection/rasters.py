@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing
 import pandas as pd
 import rasterio as rio
 from affine import Affine

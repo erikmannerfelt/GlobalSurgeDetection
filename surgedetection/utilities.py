@@ -1,5 +1,9 @@
-from typing import Any
 import datetime
+import os
+import shutil
+import urllib
+from pathlib import Path
+from typing import Any
 
 
 class ConstantType:
@@ -29,5 +33,23 @@ class ConstantType:
         """Override the Constants['key'] = value action."""
         self.raise_readonly_error(key, value)
 
+
 def now_str() -> str:
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def download_file(url: str, filepath: Path, progress: bool = True) -> Path:
+    import requests
+
+    # If it doesn't have a suffix, assume it's a directory
+    if len(filepath.suffix) == 0:
+        filename = urllib.parse.urlparse(url)[2].split("/")[-1]
+        filepath = filepath.joinpath(filename)
+
+    os.makedirs(filepath.parent, exist_ok=True)
+
+    with requests.get(url, stream=True) as request:
+        with open(filepath, "wb") as outfile:
+            shutil.copyfileobj(request.raw, outfile)
+
+    return filepath
