@@ -108,7 +108,7 @@ class RasterInput:
         end_date: pd.Timestamp,
         kind: str,
         region: str,
-        filepath: Path,
+        filepath: Path | str,
         multi_source: bool = False,
         multi_date: bool = False,
         time_prefix: str | None = None,
@@ -118,7 +118,7 @@ class RasterInput:
         self.end_date = end_date
         self.kind = kind
         self.region = region
-        self.filepath = filepath
+        self.filepath = Path(filepath)
         self.multi_date = multi_date
         self.multi_source = multi_source
         self.time_prefix = time_prefix or kind

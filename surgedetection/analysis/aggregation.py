@@ -6,6 +6,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
+from typing import Any
 
 import dask
 import matplotlib.pyplot as plt
@@ -30,7 +31,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
 
     cache_filepath = surgedetection.cache.get_cache_name(f"interpret_stack-{region_id}", extension=".zarr")
     if (not force_redo) and cache_filepath.is_dir():
-        return xr.open_zarr(cache_filepath)
+        return xr.open_zarr(cache_filepath)  # type: ignore
 
     warnings.simplefilter("error")
 
@@ -81,7 +82,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     # TODO: Speed it up by not calculating the quantile for the non-glacier value (0)
     # Problem is then the .sel call below fails because 0 is missing. I tried adding method="nearest" to .sel, but that
     # is slower than just calculating the non-glacier quantile...
-    for_quantiles = stack[["dem", "rgi_rasterized"]].stack(xy={"x", "y"}).swap_dims(xy="rgi_rasterized")
+    for_quantiles = stack[["dem", "rgi_rasterized"]].stack(xy=["x", "y"]).swap_dims(xy="rgi_rasterized")
     quantiles = (
         for_quantiles["dem"]
         .groupby("rgi_rasterized")
@@ -115,6 +116,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     task = stack.chunk(chunks).to_zarr(cache_filepath, compute=False, encoding={k: encoding for k in stack.variables})
     with TqdmCallback(desc=f"A: Computing region {attrs['label']}"):
         task.compute()
+    del task
 
     # Make sure everything is loaded from disk now instead
     stack = xr.open_zarr(cache_filepath)
@@ -161,10 +163,10 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
 
     surgedetection.cache.symlink_to_output(cache_filepath, f"region_stacks/{attrs['label']}")
 
-    return xr.open_zarr(cache_filepath)
+    return xr.open_zarr(cache_filepath)  # type: ignore
 
 
-def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, save_chunk_size: int = 100):
+def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, save_chunk_size: int = 100) -> xr.Dataset:
 
     cache_path = surgedetection.cache.get_cache_name(f"aggregate_region-{region_id}", extension=".nc")
 
@@ -213,11 +215,12 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
             with TqdmCallback(desc="Saving intermediate values"):
                 task.compute()
 
+            del task
             stack = xr.open_zarr(stack_path)
 
-        err_cols = [v for v in stack.data_vars if "_err" in v]
-        count_cols = [v.replace("_err", "_count") for v in err_cols]
-        scopes = [v for v in stack.data_vars if "_mask" in v]
+        err_cols = [v for v in stack.data_vars if "_err" in v]  # type: ignore
+        count_cols = [v.replace("_err", "_count") for v in err_cols]  # type: ignore
+        scopes = [v for v in stack.data_vars if "_mask" in v]  # type: ignore
 
         files = []
 
@@ -225,26 +228,23 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
             for scope in scopes:
                 start_time = time.time()
                 filename = Path(temp_dir).joinpath(f"{scope}.zarr")
-                progress_bar.desc = f"{scope}: Starting +{time.time() - start_time:.1f} s"
-                progress_bar.update(0)
+                progress_bar.set_description(f"{scope}: Starting +{time.time() - start_time:.1f} s")
                 filtered = stack if scope == "glacier_mask" else stack.where(stack[scope])
-                progress_bar.desc = f"{scope}: Filtered +{time.time() - start_time:.1f} s"
-                progress_bar.update(0)
+                progress_bar.set_description(f"{scope}: Filtered +{time.time() - start_time:.1f} s")
                 scoped_agg = filtered.groupby("rgi_rasterized").mean("rgi_rasterized").drop_vars(scopes)
-                progress_bar.desc = f"{scope}: Grouped1 +{time.time() - start_time:.1f} s"
-                progress_bar.update(0)
+                progress_bar.set_description(f"{scope}: Grouped1 +{time.time() - start_time:.1f} s")
 
                 pixel_counts = filtered[err_cols].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
-                progress_bar.desc = f"{scope}: Grouped2 +{time.time() - start_time:.1f} s"
-                progress_bar.update(0)
+                progress_bar.set_description(f"{scope}: Grouped2 +{time.time() - start_time:.1f} s")
                 scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))
 
-                progress_bar.desc = f"{scope}: To netcdf +{time.time() - start_time:.1f} s"
-                progress_bar.update(0)
-                task = scoped_agg.expand_dims({"scope": np.array([scope], dtype=str)}).to_zarr(filename)
+                progress_bar.set_description(f"{scope}: To netcdf +{time.time() - start_time:.1f} s")
+                scoped_agg.expand_dims({"scope": np.array([scope], dtype=str)}).to_zarr(filename)
+                filtered.close()
+                scoped_agg.close()
                 # with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
 
-                progress_bar.desc = f"{scope}: Done +{time.time() - start_time:.1f} s"
+                progress_bar.set_description(f"{scope}: Done +{time.time() - start_time:.1f} s")
                 files.append(filename)
                 progress_bar.update()
         stack.close()
@@ -265,10 +265,10 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         task = aggs.to_netcdf(cache_path, compute=False)
         with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
             task.compute()
+        del task
 
-        agg.close()
-        scoped_agg.close()
-        filtered.close()
+        # Ipython had some trouble with exit clauses, so this is an attempt to help
+        aggs.close()
 
     surgedetection.cache.symlink_to_output(cache_path, f"region_aggregates/{attrs['label']}")
 

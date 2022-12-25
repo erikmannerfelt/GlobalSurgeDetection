@@ -50,7 +50,7 @@ repos:
     args: [--strict, --ignore-missing-imports, --allow-untyped-calls, --show-error-codes, --no-warn-unused-ignores, --disable-error-code=attr-defined, --disable-error-code=name-defined] # "Name 'XXX' is not defined" occurs because of the pre-commit env.
 
 
-    additional_dependencies: [tokenize-rt==3.2.0]
+    additional_dependencies: [tokenize-rt==5.0.0]
 
 
 

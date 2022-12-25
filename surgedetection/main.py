@@ -5,6 +5,7 @@ from collections.abc import Hashable
 from pathlib import Path
 from typing import Any
 
+import dask
 import numpy as np
 import pandas as pd
 import rasterio as rio
@@ -99,10 +100,10 @@ def process_raster(
 
     coords = raster_params.xarray_coords()
     if raster_input.multi_date:
-        coords.append(("time", [raster_input.end_date]))
+        coords.append(("time", np.array([raster_input.end_date])))
 
     if raster_input.multi_source:
-        coords.append(("source", [raster_input.source]))
+        coords.append(("source", np.array([raster_input.source])))
 
     arr = xr.DataArray(
         array.reshape(array.shape + (1,) * (len(coords) - len(array.shape))),
@@ -119,7 +120,8 @@ def process_raster(
 
     arr.to_netcdf(filename)
 
-    progress_bar.update()
+    if progress_bar is not None:
+        progress_bar.update()
 
     return filename
 
@@ -134,7 +136,7 @@ def make_region_stack(
     cache_path = surgedetection.cache.get_cache_name(f"region_stack-{region_id}").with_suffix(".zarr")
 
     if cache_path.is_dir() and not force_redo:
-        return xr.open_zarr(cache_path)
+        return xr.open_zarr(cache_path)  # type: ignore
 
     # Define output parameters of the outgoing rasters
     raster_params = RasterParams.from_bounds(
@@ -154,7 +156,6 @@ def make_region_stack(
     attrs: dict[Hashable, Any] = {"bounding_box": raster_params.bounding_box(),} | region[
         ["name", "region_id", "label", "rgi_regions", "n_glaciers", "glacier_area", "height_px", "width_px", "crs_epsg"]
     ].to_dict()
-
 
     # The base dataset contains everything except the rasters which are iteratively appended later.
     base = xr.Dataset(
@@ -196,7 +197,7 @@ def make_region_stack(
 
         # Read all raster inputs, which will iteratively be converted to nc's with correct bounds
         raster_inputs = surgedetection.inputs.get_all_rasters(crs=region["crs"])
-        #raster_inputs = raster_inputs[:5]
+        # raster_inputs = raster_inputs[:5]
 
         with tqdm(total=len(raster_inputs), desc="Reprojecting datasets") as progress_bar:
             for raster_input in raster_inputs:
@@ -264,4 +265,4 @@ def make_region_stack(
 
     surgedetection.cache.symlink_to_output(cache_path, f"raw_region_stacks/{region['label']}")
 
-    return xr.open_zarr(cache_path)
+    return xr.open_zarr(cache_path)  # type: ignore
