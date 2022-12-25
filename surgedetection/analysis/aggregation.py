@@ -100,9 +100,8 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     )
 
     # Assign parameters for the output file
-    chunks = {"x": 256, "y": 256, "year": 1}
-    compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
-    save_params = {v: {"compressor": compressor} for v in stack.variables}
+    chunks = {"x": 256, "y": 256, "year": 3}
+    encoding = {"compressor": zarr.Blosc(cname="zstd", clevel=9, shuffle=2)}
 
     if cache_filepath.is_dir():
         shutil.rmtree(cache_filepath)
@@ -113,7 +112,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
         stack[variable].attrs = var_attrs[variable]
 
     # Calculate the array so far. Next up, only vars are added, so they can safely be appended
-    task = stack.chunk(chunks).to_zarr(cache_filepath, compute=False, encoding=save_params)
+    task = stack.chunk(chunks).to_zarr(cache_filepath, compute=False, encoding={k: encoding for k in stack.variables})
     with TqdmCallback(desc=f"A: Computing region {attrs['label']}"):
         task.compute()
 
@@ -130,24 +129,27 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
 
         time_diffs = subset["year"].diff("year")
 
-        new_vars = xr.merge(
-            [
-                (subset[key].diff("year").chunk(year=30) / time_diffs)
-                .reindex({"year": stack["year"]})
-                .rename(new_var_name)
-                .astype(stack[key].dtype),
-                (
+        with warnings.catch_warnings():
+            # I don't know why this warning comes up, but at this point I don't care any more!
+            warnings.filterwarnings("ignore", message="Increasing number of chunks")
+            new_vars = xr.merge(
+                [
+                    (subset[key].diff("year") / time_diffs)
+                    .reindex({"year": stack["year"]})
+                    .rename(new_var_name)
+                    .astype(stack[key].dtype),
                     (
-                        (subset[f"{key}_err"].isel(year=slice(1, None)) ** 2)
-                        + (subset[f"{key}_err"].isel(year=slice(-1)).values ** 2) ** 0.5
+                        (
+                            (subset[f"{key}_err"].isel(year=slice(1, None)) ** 2)
+                            + (subset[f"{key}_err"].isel(year=slice(-1)).values ** 2) ** 0.5
+                        )
+                        / time_diffs
                     )
-                    / time_diffs
-                )
-                .reindex({"year": stack["year"]})
-                .rename(new_err_name)
-                .astype(stack[f"{key}_err"].dtype),
-            ]
-        )
+                    .reindex({"year": stack["year"]})
+                    .rename(new_err_name)
+                    .astype(stack[f"{key}_err"].dtype),
+                ]
+            )
         # It seems like each to_zarr call removes the top-level attributes. This reintroduces them each time
         new_vars.attrs = stack.attrs.copy()
 
@@ -155,8 +157,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
         for old_key, new_key in [(key, new_var_name), (f"{key}_err", new_err_name)]:
             new_vars[new_key].attrs = subset[old_key].attrs.copy()
 
-        save_params = {v: {"compressor": compressor} for v in [new_var_name, new_err_name]}
-        new_vars.chunk(chunks).to_zarr(cache_filepath, mode="a", encoding=save_params)
+        new_vars.chunk(chunks).to_zarr(cache_filepath, mode="a", encoding={v: encoding for v in new_vars.data_vars})
 
     surgedetection.cache.symlink_to_output(cache_filepath, f"region_stacks/{attrs['label']}")
 
