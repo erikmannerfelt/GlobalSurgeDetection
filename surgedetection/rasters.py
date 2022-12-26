@@ -35,6 +35,12 @@ def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: s
     del vrt
 
 
+def build_vrt(filepaths: list[Path | str], vrt_filepath: Path) -> None:
+    from osgeo import gdal
+
+    gdal.BuildVRT(str(vrt_filepath), list(map(str, filepaths)))
+
+
 def separate_band_vrt(filepath: Path | str, vrt_filepath: Path | str, band_nrs: list[int]) -> None:
     from osgeo import gdal
 

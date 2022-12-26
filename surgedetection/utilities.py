@@ -49,6 +49,8 @@ def download_file(url: str, filepath: Path, progress: bool = True) -> Path:
     os.makedirs(filepath.parent, exist_ok=True)
 
     with requests.get(url, stream=True) as request:
+        if request.status_code != 200:
+            raise ValueError(f"{request.status_code=} {request.content=}")
         with open(filepath, "wb") as outfile:
             shutil.copyfileobj(request.raw, outfile)
 

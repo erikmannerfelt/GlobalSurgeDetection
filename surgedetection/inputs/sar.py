@@ -1,4 +1,5 @@
 import re
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -8,27 +9,36 @@ from pyproj import CRS
 
 import surgedetection.cache
 import surgedetection.rasters
-
-from surgedetection.rasters import RasterInput
 from surgedetection.constants import CONSTANTS
+from surgedetection.rasters import RasterInput
+
+DATA_DIR = CONSTANTS.data_path.joinpath("sar")
 
 
 def read_all_sar(crs: CRS | int, data_path: str = "sar") -> list[RasterInput]:
     return (
-        read_sentinel1_diff(crs=crs, data_path=data_path + "/sentinel-1-diff")# + 
-        #read_asar_jers(crs=crs, data_path=data_path)
-        #read_sentinel1(crs=crs, data_path=data_path + "/sentinel-1") + 
+        read_sentinel1_diff(crs=crs, data_path=data_path + "/sentinel-1-diff")  # +
+        # read_asar_jers(crs=crs, data_path=data_path)
+        # read_sentinel1(crs=crs, data_path=data_path + "/sentinel-1") +
     )
 
 
-def read_sentinel1_diff(crs: CRS | int, data_path: str = "sar/sentinel-1-diff") -> list[RasterInput]:
-    full_data_path = CONSTANTS.data_path.joinpath(data_path)
+def get_sentinel1_diff_files(region: pd.Series) -> list[RasterInput]:
+    data_dir = DATA_DIR.joinpath("sentinel-1-diff")
 
-    if isinstance(crs, int):
-        crs = CRS.from_epsg(crs)
+    filepaths = []
+    for i, year_after in enumerate(CONSTANTS.sentinel1_years[1:], start=1):
+        year_before = CONSTANTS.sentinel1_years[i - 1]
+
+        filepath = data_dir.joinpath(f"{region['label']}_{year_before}-{year_after}.tif")
+
+        if filepath.is_file():
+            filepaths.append(filepath)
+        else:
+            warnings.warn(f"{filepath.name} is missing (needs to be downloaded via Earth Engine). Continuing anyway")
 
     rasters = []
-    for filepath in full_data_path.glob("*.tif"):
+    for filepath in filepaths:
         region_id = filepath.stem.split("-")[0]
 
         year_before, year_after = map(int, filepath.stem.split("_")[-1].split("-"))
@@ -42,30 +52,35 @@ def read_sentinel1_diff(crs: CRS | int, data_path: str = "sar/sentinel-1-diff") 
                 continue
 
             vrt_filepath = surgedetection.cache.get_cache_name(
-                "sar-read_sentinel1_diff", args=[year_before, year_after, filepath, band_name, crs], extension=".vrt",
+                "sar-read_sentinel1_diff",
+                args=[year_before, year_after, filepath, band_name, region["crs"]],
+                extension=".vrt",
             )
             if not vrt_filepath.is_file():
                 surgedetection.rasters.separate_band_vrt(filepath, vrt_filepath, band_nrs=[i])
 
-            rasters.append(RasterInput(
-                source="S1-" + band_name,
-                start_date=start_date,
-                end_date=end_date,
-                kind="sar_backscatter_diff",
-                region=region_id,
-                filepath=vrt_filepath,
-                multi_source=True,
-                multi_date=True,
-            ))
+            rasters.append(
+                RasterInput(
+                    source="S1-" + band_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    kind="sar_backscatter_diff",
+                    region=region_id,
+                    filepath=vrt_filepath,
+                    multi_source=True,
+                    multi_date=True,
+                )
+            )
     return rasters
+
 
 def read_sentinel1(crs: CRS | int, data_path: str = "sar/sentinel-1") -> list[RasterInput]:
     full_data_path = CONSTANTS.data_path.joinpath(data_path)
 
     if isinstance(crs, int):
         crs = CRS.from_epsg(crs)
-    #indices = []
-    #data = []
+    # indices = []
+    # data = []
 
     rasters = []
     for filepath in full_data_path.glob("*.tif"):
@@ -91,7 +106,6 @@ def read_sentinel1(crs: CRS | int, data_path: str = "sar/sentinel-1") -> list[Ra
 
                 out_path = cache_path
 
-        
         rasters.append(
             RasterInput(
                 source=satellite,
@@ -105,13 +119,13 @@ def read_sentinel1(crs: CRS | int, data_path: str = "sar/sentinel-1") -> list[Ra
             )
         )
 
-        #indices.append((region, start_date, end_date, "sar_backscatter", satellite))
+        # indices.append((region, start_date, end_date, "sar_backscatter", satellite))
 
-    #return pd.Series(
+    # return pd.Series(
     #    data,
     #    index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"]),
     #    dtype=object,
-    #).sort_index()
+    # ).sort_index()
     return rasters
 
 
@@ -121,8 +135,8 @@ def read_asar_jers(crs: CRS | int, data_path: str = "sar") -> list[RasterInput]:
     if isinstance(crs, int):
         crs = CRS.from_epsg(crs)
 
-    #indices = []
-    #data: list[str | Path] = []
+    # indices = []
+    # data: list[str | Path] = []
     rasters = []
     for zip_filepath in [full_data_path.joinpath("Svalbard_ASAR.zip"), full_data_path.joinpath("Svalbard_JERS.zip")]:
 
@@ -155,11 +169,11 @@ def read_asar_jers(crs: CRS | int, data_path: str = "sar") -> list[RasterInput]:
             else:
                 raise NotImplementedError()
 
-            #indices.append(("svalbard", start_date, end_date, "sar_backscatter", satellite))
+            # indices.append(("svalbard", start_date, end_date, "sar_backscatter", satellite))
             with rio.open(full_fp) as raster:
                 if raster.crs == crs:
                     out_path = full_fp
-                    #data.append(full_fp)
+                    # data.append(full_fp)
 
                 else:
                     cache_path = surgedetection.cache.get_cache_name(
@@ -168,19 +182,21 @@ def read_asar_jers(crs: CRS | int, data_path: str = "sar") -> list[RasterInput]:
                     surgedetection.rasters.create_warped_vrt(full_fp, cache_path, out_crs=crs.to_wkt())
 
                     out_path = full_fp
-                    #data.append(cache_path)
+                    # data.append(cache_path)
 
-            rasters.append(RasterInput(
-                region="svalbard",
-                source=satellite,
-                start_date=start_date,
-                end_date=end_date,
-                kind="sar_backscatter",
-                filepath=out_path,
-                multi_source=True,
-                multi_date=True
-            ))
+            rasters.append(
+                RasterInput(
+                    region="svalbard",
+                    source=satellite,
+                    start_date=start_date,
+                    end_date=end_date,
+                    kind="sar_backscatter",
+                    filepath=out_path,
+                    multi_source=True,
+                    multi_date=True,
+                )
+            )
     return rasters
-    #return pd.Series(
+    # return pd.Series(
     #    data, index=pd.MultiIndex.from_tuples(indices, names=["region", "start_date", "end_date", "kind", "source"])
-    #).sort_index()
+    # ).sort_index()

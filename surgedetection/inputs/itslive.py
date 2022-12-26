@@ -19,13 +19,16 @@ BASE_DOWNLOAD_URL = "https://its-live-data.s3.amazonaws.com/velocity_mosaic/land
 YEARS = list(range(1985, 2019))
 
 
-def read_files(crs: CRS, data_path: Path = DATA_DIR) -> list[RasterInput]:
+def get_files(region: pd.Series) -> list[RasterInput]:
+
+    rgi_regions = list(map(lambda s: int(s.split("-")[0]), region["rgi_regions"].split("/")))
+    filepaths = download_all_itslive(rgi_regions=rgi_regions)
 
     rasters = []
     variables = {"v": "ice_velocity", "v_err": "ice_velocity_err", "date": "ice_velocity_date"}
-    for filepath in data_path.glob("*.nc"):
+    for filepath in filepaths:
 
-        region = filepath.stem.split("_")[0]
+        itslive_region = filepath.stem.split("_")[0]
         year = int(filepath.stem.split("_")[-1])
         start_date = pd.Timestamp(year=year, month=1, day=1)
         end_date = pd.Timestamp(year=year, month=12, day=31, hour=23, minute=59, second=59)
@@ -34,10 +37,11 @@ def read_files(crs: CRS, data_path: Path = DATA_DIR) -> list[RasterInput]:
             variable_path = f"NETCDF:{filepath}:{variable}"
 
             cache_path = surgedetection.cache.get_cache_name(
-                "itslive-read_files", [year, variable, data_path]
+                "itslive-read_files", [itslive_region, year, variable, DATA_DIR]
             ).with_suffix(".vrt")
 
-            surgedetection.rasters.create_warped_vrt(variable_path, cache_path, out_crs=crs.to_wkt())
+            if not cache_path.is_file():
+                surgedetection.rasters.create_warped_vrt(variable_path, cache_path, out_crs=region["crs"].to_wkt())
 
             rasters.append(
                 RasterInput(
@@ -45,7 +49,7 @@ def read_files(crs: CRS, data_path: Path = DATA_DIR) -> list[RasterInput]:
                     start_date=start_date,
                     end_date=end_date,
                     kind=variables[variable],
-                    region=region,
+                    region=itslive_region,
                     filepath=cache_path,
                     multi_source=False,
                     multi_date=True,
@@ -81,21 +85,25 @@ def rgi_mapping(rgi_region: int | str, res: str = "_G0240") -> str | None:
     return None
 
 
-def download_all_itslive() -> None:
-    labels = set(filter(None, map(rgi_mapping, CONSTANTS.rgi_regions)))
+def download_all_itslive(rgi_regions: list[int] | None = None, progress: bool = True) -> list[Path]:
+    labels = set(filter(None, map(rgi_mapping, rgi_regions or CONSTANTS.rgi_regions)))
 
-    filenames = []
+    filepaths = []
+    queries = []
     for label in labels:
         for year in YEARS:
             filename = f"{label}_{year}.nc"
-            if DATA_DIR.joinpath(filename).is_file():
-                continue
-            filenames.append(filename)
+            filepath = DATA_DIR.joinpath(filename)
+            if filepath.is_file():
+                filepaths.append(filepath)
+            else:
+                queries.append({"url": urllib.parse.urljoin(BASE_DOWNLOAD_URL, filename), "filepath": filepath})
 
-    for filename in tqdm(filenames, desc="Downloading ITS-LIVE data"):
-        filepath = surgedetection.utilities.download_file(
-            urllib.parse.urljoin(BASE_DOWNLOAD_URL, filename), DATA_DIR, progress=False
-        )
+    for query in tqdm(queries, desc="Downloading ITS-LIVE data", disable=(not progress or len(queries) == 0)):
+        filepath = surgedetection.utilities.download_file(**query, progress=False)
 
         # Validate that the filepath is a valid nc file
         xr.open_dataset(filepath).close()
+        filepaths.append(filepath)
+
+    return filepaths

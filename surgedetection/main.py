@@ -196,7 +196,7 @@ def make_region_stack(
         del base
 
         # Read all raster inputs, which will iteratively be converted to nc's with correct bounds
-        raster_inputs = surgedetection.inputs.get_all_rasters(crs=region["crs"])
+        raster_inputs = surgedetection.inputs.get_all_rasters(region=region)
         # raster_inputs = raster_inputs[:5]
 
         with tqdm(total=len(raster_inputs), desc="Reprojecting datasets") as progress_bar:

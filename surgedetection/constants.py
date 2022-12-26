@@ -13,6 +13,7 @@ class Constants(surgedetection.utilities.ConstantType):
     output_dir_path: Path = Path(__file__).parent.parent.joinpath("output")
     days_per_year: float = 365.2425
     rgi_regions: list[int] = list(range(1, 20))
+    sentinel1_years: list[int] = list(range(2015, 2022))
 
 
 CONSTANTS = Constants()

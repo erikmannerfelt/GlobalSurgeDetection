@@ -18,21 +18,18 @@ from surgedetection.rasters import RasterInput
 
 BASE_DOWNLOAD_URL = "https://services-theia.sedoo.fr/glaciers/data/v1_0/"
 YEARS = list(range(2000, 2020, 5))
-RGI_ZONES = list(range(1, 20))
 
 DATA_DIR = CONSTANTS.data_path.joinpath("hugonnet-etal-2021")
 
 
-def get_filepaths(tarfile_dir: Path = DATA_DIR, crs: int | CRS = 32633) -> list[RasterInput]:
+def get_files(region: pd.Series) -> list[RasterInput]:
 
-    full_tarfile_dirpath = CONSTANTS.data_path.joinpath(tarfile_dir)
-
-    if isinstance(crs, int):
-        crs = CRS.from_epsg(crs)
+    rgi_regions = list(map(lambda s: int(s.split("-")[0]), region["rgi_regions"].split("/")))
+    filepaths = download_all_aster(rgi_regions=rgi_regions)
 
     rasters = []
-    for filepath in full_tarfile_dirpath.glob("*.tar"):
-        region = filepath.stem.split("_")[0]
+    for filepath in filepaths:
+        rgi_region = filepath.stem.split("_")[0]
         start_date = pd.to_datetime(filepath.stem.split("_")[-2])
         end_date = pd.to_datetime(filepath.stem.split("_")[-1])
 
@@ -43,8 +40,8 @@ def get_filepaths(tarfile_dir: Path = DATA_DIR, crs: int | CRS = 32633) -> list[
                     start_date=start_date,
                     end_date=end_date,
                     kind=kind,
-                    region=region,
-                    filepath=load_tarfile(filepath, crs, pattern=".*" + kind + r"\.tif"),
+                    region=rgi_region,
+                    filepath=load_tarfile(filepath, crs=region["crs"], pattern=".*" + kind + r"\.tif"),
                     multi_date=True,
                     multi_source=False,
                     time_prefix="dhdt",
@@ -133,19 +130,24 @@ def download_aster(rgi_region: str, period: str, filepath: Path) -> Path:
     return filepath
 
 
-def download_all_aster() -> None:
-    rgi_queries = {aster_rgi_zone_mapping(zone) + "_rgi60" for zone in RGI_ZONES}
+def download_all_aster(rgi_regions: list[int] | None = None, progress: bool = True) -> list[Path]:
+    rgi_queries = {aster_rgi_zone_mapping(zone) + "_rgi60" for zone in (rgi_regions or CONSTANTS.rgi_regions)}
     period_queries = [f"{year}-01-01_{year + 5}-01-01" for year in YEARS]
 
+    filepaths = []
     queries = []
     for rgi in rgi_queries:
         for period in period_queries:
             local_filepath = DATA_DIR.joinpath(f"{rgi}_{period}.tar")
             if local_filepath.is_file():
+                filepaths.append(local_filepath)
                 continue
             queries.append({"rgi_region": rgi, "period": period, "filepath": local_filepath})
 
-    for query in tqdm(queries, desc="Downloading ASTER data"):
+    for query in tqdm(queries, desc="Downloading ASTER data", disable=(not progress or len(queries) == 0)):
         download_aster(**query)
         # List the filepaths in the tarfile. If the file is not a tarfile, this will fail
         surgedetection.io.list_tar_filepaths(query["filepath"])
+        filepaths.append(query["filepath"])
+
+    return filepaths
