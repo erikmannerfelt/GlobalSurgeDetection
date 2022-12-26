@@ -18,7 +18,7 @@
           python_packages.python.withPackages (_: map (req: (builtins.getAttr req python_packages)) requirements)
         );
 
-        python = python_from_requirements ../../requirements.txt;
+        #python = python_from_requirements ./requirements.txt;
 
         packages = pkgs.lib.attrsets.recursiveUpdate
           (builtins.listToAttrs (map (pkg: { name = pkg.pname; value = pkg; }) (with pkgs; [
@@ -27,14 +27,14 @@
             graphviz
           ])))
           {
-            inherit python python_from_requirements python_packages;
+            inherit python_from_requirements python_packages;
           };
 
 
       in
       {
         inherit packages;
-        defaultPackage = packages.python;
+        #defaultPackage = packages.python;
 
         devShell = pkgs.mkShell {
           name = "GlobalSurgeDetection";

@@ -16,7 +16,7 @@ from tqdm import tqdm
 import surgedetection.cache
 
 
-def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: str) -> None:
+def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: str, in_crs: str = None) -> None:
     """
     Create a warped VRT from a raster with a different CRS.
 
@@ -28,24 +28,28 @@ def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: s
     from osgeo import gdal
 
     ds = gdal.Open(str(filepath))
-    vrt = gdal.AutoCreateWarpedVRT(ds, None, out_crs, rasterio.warp.Resampling.cubic_spline)
+    vrt = gdal.AutoCreateWarpedVRT(ds, in_crs, out_crs, rasterio.warp.Resampling.bilinear)
     vrt.GetDriver().CreateCopy(str(vrt_filepath), vrt)
 
     del ds
     del vrt
 
 
-def build_vrt(filepaths: list[Path | str], vrt_filepath: Path) -> None:
+def build_vrt(filepaths: list[Path | str], vrt_filepath: Path, gdal_kwargs: dict[str, str] | None = None) -> None:
     from osgeo import gdal
+    if gdal_kwargs is None:
+        gdal_kwargs = {}
 
-    gdal.BuildVRT(str(vrt_filepath), list(map(str, filepaths)))
+    gdal.BuildVRT(str(vrt_filepath), list(map(str, filepaths)), **gdal_kwargs)
 
 
-def separate_band_vrt(filepath: Path | str, vrt_filepath: Path | str, band_nrs: list[int]) -> None:
+def separate_band_vrt(filepath: Path | str, vrt_filepath: Path | str, band_nrs: list[int], gdal_kwargs: dict[str, str] | None = None) -> None:
     from osgeo import gdal
+    if gdal_kwargs is None:
+        gdal_kwargs = {}
 
     ds = gdal.Open(str(filepath))
-    gdal.BuildVRT(str(vrt_filepath), ds, bandList=band_nrs)
+    gdal.BuildVRT(str(vrt_filepath), ds, bandList=band_nrs, **gdal_kwargs)
 
 
 def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs: int | CRS, out_path: Path) -> None:
@@ -107,52 +111,40 @@ def merge_raster_tiles(filepaths: list[str | Path] | list[str] | list[Path], crs
         raise ValueError(f"Only 'vrt' and 'tif' suffixes are supported. Given: '{out_path.suffix}'")
 
 
-class RasterInput:
-    def __init__(
-        self,
-        source: str,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        kind: str,
-        region: str,
-        filepath: Path | str,
-        multi_source: bool = False,
-        multi_date: bool = False,
-        time_prefix: str | None = None,
-    ):
-        self.source = source
-        self.start_date = start_date
-        self.end_date = end_date
-        self.kind = kind
-        self.region = region
-        self.filepath = Path(filepath)
-        self.multi_date = multi_date
-        self.multi_source = multi_source
-        self.time_prefix = time_prefix or kind
+class RasterParams:
+    def __init__(self, transform: Affine, height: int, width: int, crs: CRS, coordinate_suffix: str = ""):
+
+        self.transform = transform
+        self.height = int(height)
+        self.width = int(width)
+        self.crs = CRS(crs)
+        self.coordinate_suffix = coordinate_suffix
 
     def __str__(self) -> str:
         return "\n".join(
             (
-                f"RasterInput: {self.kind} from {self.source}",
-                f"Dates: {self.start_date}-{self.end_date}",
-                f"Region: {self.region}",
-                f"{self.multi_date=}, {self.multi_source=}",
+                f"RasterParams: {self.bounding_box()} in {self.crs.to_string()}",
+                f"Shape: {self.shape()}, xres: {self.xres()}, yres: {self.yres()}",
+                f"xarray coordinate suffix: {self.coordinate_suffix}",
             )
         )
 
-
-class RasterParams:
-    def __init__(self, transform: Affine, height: int, width: int, crs: CRS):
-
-        self.transform = transform
-        self.height = height
-        self.width = width
-        self.crs = crs
+    @staticmethod
+    def from_bounds(bounding_box: list[float], height: int, width: int, crs: CRS, coordinate_suffix: str = ""):  # type: ignore
+        transform = rio.transform.from_bounds(*bounding_box, width, height)
+        return RasterParams(transform=transform, height=height, width=width, crs=crs, coordinate_suffix=coordinate_suffix)
 
     @staticmethod
-    def from_bounds(bounding_box: list[float], height: int, width: int, crs: CRS):  # type: ignore
-        transform = rio.transform.from_bounds(*bounding_box, width, height)
-        return RasterParams(transform=transform, height=height, width=width, crs=crs)
+    def from_bounds_and_res(bounding_box: list[float], xres: float, yres: float, crs: CRS, coordinate_suffix: str = ""):  # type: ignore
+        """
+        NOTE: The outgoing bounding box may be larger as it is adapted to fit xres/yres evenly
+        """
+        width = int(np.ceil((bounding_box[2] - bounding_box[0]) / xres))
+        height = int(np.ceil((bounding_box[3] - bounding_box[1]) / yres))
+
+        transform = rio.transform.from_origin(bounding_box[0], bounding_box[3], xres, yres)
+
+        return RasterParams(transform=transform, height=height, width=width, crs=crs, coordinate_suffix=coordinate_suffix)
 
     def copy(self):  # type: ignore
         return copy.deepcopy(self)
@@ -180,11 +172,11 @@ class RasterParams:
 
         coords = [
             (
-                "y",
+                "y" + self.coordinate_suffix,
                 np.linspace(bounds[1] + res[1] / 2, bounds[3] - res[1] / 2, self.height, dtype="float64")[::-1],
             ),
             (
-                "x",
+                "x" + self.coordinate_suffix,
                 np.linspace(
                     bounds[0] + res[0] / 2,
                     bounds[2] - res[0] / 2,
@@ -194,6 +186,42 @@ class RasterParams:
             ),
         ]
         return coords
+
+class RasterInput:
+    def __init__(
+        self,
+        source: str,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        kind: str,
+        region: str,
+        filepath: Path | str,
+        multi_source: bool = False,
+        multi_date: bool = False,
+        time_prefix: str | None = None,
+        raster_params: RasterParams | None = None,
+    ):
+        self.source = source
+        self.start_date = start_date
+        self.end_date = end_date
+        self.kind = kind
+        self.region = region
+        self.filepath = Path(filepath)
+        self.multi_date = multi_date
+        self.multi_source = multi_source
+        self.time_prefix = time_prefix or kind
+        self.raster_params = raster_params
+
+    def __str__(self) -> str:
+        return "\n".join(
+            (
+                f"RasterInput: {self.kind} from {self.source}",
+                f"Dates: {self.start_date}-{self.end_date}",
+                f"Region: {self.region}",
+                f"{self.multi_date=}, {self.multi_source=}",
+            )
+        )
+
 
 
 def make_input_series(inputs: list[RasterInput]) -> pd.Series:

@@ -11,3 +11,4 @@ graphviz
 zarr
 mypy
 requests
+cdsapi

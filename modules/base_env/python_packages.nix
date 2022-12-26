@@ -2,7 +2,6 @@
 let
   pythonpkgs = pkgs.python310Packages.override {
     overrides = self: super: {
-
       scikit-gstat = super.buildPythonPackage rec {
         pname = "scikit-gstat";
         version = "1.0.8";
@@ -57,6 +56,19 @@ let
           google-cloud-storage
           google-api-python-client
           future
+        ];
+        setuptoolsCheckPhase = "true";
+      };
+      cdsapi = super.buildPythonPackage rec {
+        pname = "cdsapi";
+        version = "0.5.1";
+        src = super.fetchPypi {
+          inherit pname version;
+          sha256 = "GfPpLxmWzBEV0LAoFhft6uzz7vygP704TPvFINXwR20=";
+        };
+        propagatedBuildInputs = with super; [
+          requests
+          tqdm
         ];
         setuptoolsCheckPhase = "true";
       };
