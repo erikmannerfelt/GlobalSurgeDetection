@@ -38,7 +38,7 @@ def now_str() -> str:
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
 
 
-def download_file(url: str, filepath: Path, progress: bool = True) -> Path:
+def download_file(url: str, filepath: Path) -> Path:
     import requests
 
     # If it doesn't have a suffix, assume it's a directory

@@ -82,23 +82,48 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     # TODO: Speed it up by not calculating the quantile for the non-glacier value (0)
     # Problem is then the .sel call below fails because 0 is missing. I tried adding method="nearest" to .sel, but that
     # is slower than just calculating the non-glacier quantile...
+    quantiles_to_calculate = np.linspace(0, 1, 11)[1:-1] 
     for_quantiles = stack[["dem", "rgi_rasterized"]].stack(xy=["x", "y"]).swap_dims(xy="rgi_rasterized")
     quantiles = (
         for_quantiles["dem"]
         .groupby("rgi_rasterized")
-        .quantile([0.33, 0.67])
+        .quantile(quantiles_to_calculate)
         .sel(rgi_rasterized=stack["rgi_rasterized"])
     )
+    del for_quantiles
+    quantile_masks = [stack["dem"] < quantiles.sel(quantile=quantile).reset_coords(drop=True) for quantile in quantiles_to_calculate]
+    del quantiles
+    all_breaks = np.r_[[0], quantiles_to_calculate, [1]]
+    for i, quantile in enumerate(all_breaks[1:]):
+        quantile_before = all_breaks[i]
+        name = f"p_{quantile_before * 100:.0f}_{quantile * 100:.0f}_mask"
+
+        # If it's the first range (e.g. 0-10%), just take the first quantile mask (< 10%)
+        if i == 0:
+            mask = quantile_masks[0]
+        # If it's the last range (e.g. 90-100%), take the inverse of the last mask (NOT < 90%, i.e. >= 90%)
+        elif i == (all_breaks.shape[0] - 2):
+            mask = ~quantile_masks[-1] 
+        # Otherise, take the difference between the upper and lower mask (e.g. <70% & NOT <60%)
+        else:
+            mask = quantile_masks[i] & (~quantile_masks[i - 1]) 
+            
+        stack[name] = stack["glacier_mask"] & mask
+        
+    for variable in stack.data_vars:
+        if "_mask" not in variable:
+            continue
+        stack[variable].attrs["_CRS"] = stack["rgi_rasterized"].attrs["_CRS"]
 
     # Generate a terminus mask; True for all locations in the lower third of each individual glacier
-    stack["terminus_mask"] = stack["glacier_mask"] & (stack["dem"] <= quantiles.sel(quantile=0.33)).reset_coords(
-        drop=True
-    )
+    #stack["terminus_mask"] = stack["glacier_mask"] & (stack["dem"] <= quantiles.sel(quantile=0.33)).reset_coords(
+    #    drop=True
+    #)
 
     # Generate a terminus mask; True for all locations in the upper third of each individual glacier
-    stack["accumulation_mask"] = stack["glacier_mask"] & (stack["dem"] >= quantiles.sel(quantile=0.67)).reset_coords(
-        drop=True
-    )
+    #stack["accumulation_mask"] = stack["glacier_mask"] & (stack["dem"] >= quantiles.sel(quantile=0.67)).reset_coords(
+    #    drop=True
+    #)
 
     # Assign parameters for the output file
     chunks = {"x": 256, "y": 256, "year": 3}
@@ -210,12 +235,9 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
                 stack[variable].attrs.clear()
                 stack[variable].encoding.update(compressor=zarr.Blosc(cname="zstd", clevel=3, shuffle=2))
             stack_path = temp_dir_path.joinpath("stack.zarr")
-            task = stack.chunk({"rgi_rasterized": 256**2, "year": 10}).to_zarr(stack_path, compute=False)
+            print("Saving intermediate values")
+            stack.chunk({"rgi_rasterized": 256**2, "year": 10}).to_zarr(stack_path, compute=True)
 
-            with TqdmCallback(desc="Saving intermediate values"):
-                task.compute()
-
-            del task
             stack = xr.open_zarr(stack_path)
 
         err_cols = [v for v in stack.data_vars if "_err" in v]  # type: ignore
@@ -234,12 +256,14 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
                 scoped_agg = filtered.groupby("rgi_rasterized").mean("rgi_rasterized").drop_vars(scopes)
                 progress_bar.set_description(f"{scope}: Grouped1 +{time.time() - start_time:.1f} s")
 
-                pixel_counts = filtered[err_cols].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
+                cols_to_count = err_cols + [scope]
+                pixel_counts = filtered[cols_to_count].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
                 progress_bar.set_description(f"{scope}: Grouped2 +{time.time() - start_time:.1f} s")
-                scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))
+                scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))[count_cols]
+                scoped_agg["area"] = pixel_counts[scope]
 
                 progress_bar.set_description(f"{scope}: To netcdf +{time.time() - start_time:.1f} s")
-                scoped_agg.expand_dims({"scope": np.array([scope], dtype=str)}).to_zarr(filename)
+                scoped_agg.expand_dims({"scope": np.array([scope.replace("_mask", "")], dtype=str)}).to_zarr(filename)
                 filtered.close()
                 scoped_agg.close()
                 # with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
@@ -252,6 +276,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         aggs = xr.open_mfdataset(files, concat_dim="scope", combine="nested", engine="zarr")
         aggs["rgi_rasterized"] = rgi_ids.loc[aggs["rgi_rasterized"].values].values
         aggs["rgi_rasterized"] = aggs["rgi_rasterized"].astype(str)
+        aggs["area"] = aggs["area"] * (CONSTANTS.pixel_size ** 2)
         aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope")
 
         attrs["creation_date"] = surgedetection.utilities.now_str()
