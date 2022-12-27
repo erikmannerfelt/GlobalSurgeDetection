@@ -35,10 +35,10 @@ def load_dem(
 
     return [
         surgedetection.rasters.RasterInput(
-            source="copernicus-glo90",
-            start_date=pd.Timestamp("2011-01-01"),
-            end_date=pd.Timestamp("2015-07-01"),
-            kind="dem",
+            sources="copernicus-glo90",
+            start_dates=pd.Timestamp("2011-01-01"),
+            end_dates=pd.Timestamp("2015-07-01"),
+            kinds="dem",
             region="07",
             filepath=cache_path,
             multi_source=False,
@@ -64,10 +64,10 @@ def load_region_dem(region: pd.Series) -> RasterInput:
         surgedetection.rasters.create_warped_vrt(vrt_cache_file, cache_path, region["crs"].to_wkt())
 
     return surgedetection.rasters.RasterInput(
-        source="copernicus-glo90",
-        start_date=pd.Timestamp("2011-01-01"),
-        end_date=pd.Timestamp("2015-07-01"),
-        kind="dem",
+        sources="copernicus-glo90",
+        start_dates=pd.Timestamp("2011-01-01"),
+        end_dates=pd.Timestamp("2015-07-01"),
+        kinds="dem",
         region=region["region_id"],
         filepath=cache_path,
         multi_date=False,

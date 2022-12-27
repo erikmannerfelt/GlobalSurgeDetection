@@ -20,6 +20,9 @@ from tqdm.dask import TqdmCallback
 import surgedetection.cache
 import surgedetection.inputs
 import surgedetection.inputs.climate
+import surgedetection.inputs.sar
+import surgedetection.inputs.dem
+import surgedetection.inputs.aster
 import surgedetection.regions
 import surgedetection.utilities
 from surgedetection.constants import CONSTANTS
@@ -83,73 +86,64 @@ def process_raster(
     -------
     A path to the netcdf.
     """
-    with rio.open(raster_input.filepath) as raster:
-        crs_matches = raster.crs == raster_params.crs
+
     with tempfile.TemporaryDirectory() as temp_dir:
+        vrt_path = Path(temp_dir).joinpath("in.vrt")
+        surgedetection.rasters.build_vrt_new(
+            raster_input.filepath,
+            vrt_filepath=vrt_path,
+            dst_bounds=raster_params.bounding_box(),
+            dst_crs=raster_params.crs,
+            dst_res=raster_params.resolution(),
+        )
 
-        if crs_matches:
-            input_filepath = raster_input.filepath
-        else:
-            input_filepath = Path(temp_dir).joinpath("r.vrt")
-            surgedetection.rasters.create_warped_vrt(raster_input.filepath, input_filepath, out_crs=raster_params.crs.to_wkt())
+        with rio.open(vrt_path) as raster:
+            data = raster.read(raster_input.band_numbers, masked=True).filled(np.nan)
 
+        if data.shape[0] == 1:
+            data = data[0, :, :]
 
-        with rio.open(input_filepath) as raster:
-            window = raster.window(*raster_params.bounding_box())
-            src_transform = raster.window_transform(window)
-            src_crs = raster.crs
-            src_dtype = raster.dtypes[0]
-
-            orig = raster.read(1, window=window, masked=True)
-
-    orig = orig.astype("float32").filled(np.nan)
-
-    if np.count_nonzero(np.isfinite(orig)) == 0:
+        if len(data.shape) > 2:
+            data = np.moveaxis(data, 0, 2)
+            
+    if np.count_nonzero(np.isfinite(data)) == 0:
         progress_bar.update()
         return None
-
-    if all(
-        (
-            src_transform == raster_params.transform,
-            src_crs == raster_params.crs,
-            orig.shape == raster_params.shape,
-        )
-    ):
-        array = orig
-    else:
-        array = np.empty(shape=raster_params.shape(), dtype=src_dtype)
-        rasterio.warp.reproject(
-            orig,
-            array,
-            src_transform=src_transform,
-            src_crs=src_crs,
-            dst_transform=raster_params.transform,
-            dst_crs=raster_params.crs,
-            dst_resolution=CONSTANTS.pixel_size,
-            resampling=rasterio.warp.Resampling.bilinear,
-            num_threads=n_threads or ((os.cpu_count() or 2) - 1),
-        )
-        del orig
-
+            
     coords = raster_params.xarray_coords()
+    arrs = {}
+    out_shape = data.shape
+    if len(raster_input.kinds) > 1:
+        out_shape = out_shape[:2]
+        
     if raster_input.multi_date:
-        coords.append(("time", np.array([raster_input.end_date])))
-
+        coords.append(("time", np.array([raster_input.end_dates]).ravel()))
+        out_shape = out_shape + (1,)
     if raster_input.multi_source:
-        coords.append(("source", np.array([raster_input.source])))
+        coords.append(("source", np.array([raster_input.sources]).ravel()))
+        out_shape = out_shape + (1,)
 
-    arr = xr.DataArray(
-        array.reshape(array.shape + (1,) * (len(coords) - len(array.shape))),
-        coords=coords,
-        name=raster_input.kind,
-        attrs={
-            "description": RASTER_DESCRIPTIONS[str(raster_input.kind)],
-            "interval_seconds": (raster_input.end_date - raster_input.start_date).total_seconds(),  # type: ignore
-            "source": "variable" if raster_input.multi_source else raster_input.source,
-            "start_date": "variable" if raster_input.multi_date else raster_input.start_date.isoformat(),
-            "end_date": "variable" if raster_input.multi_date else raster_input.end_date.isoformat(),
-        },
-    )
+    if (len(raster_input.sources) > 1) and raster_input.multi_date:
+        out_shape = data.shape[:2] + (1,) + (data.shape[2],)
+    elif len(raster_input.end_dates) > 1 and raster_input.multi_source:
+        out_shape = data.shape + (1,)
+
+    for i, kind in enumerate(raster_input.kinds):
+        arr = data if len(raster_input.kinds) == 1 else data[:, :, i]
+        arrs[kind] = xr.DataArray(
+            arr.reshape(out_shape),
+            coords=coords,
+            name=kind,
+            attrs = {
+                "source": "variable" if raster_input.multi_source else raster_input.sources[0],
+                "start_date": "variable" if raster_input.multi_date else raster_input.start_dates[0].isoformat(),
+                "end_date": "variable" if raster_input.multi_date else raster_input.end_dates[0].isoformat(),
+            }
+        )
+
+               
+    arr = xr.Dataset(arrs)
+        
 
     if in_memory:
         if progress_bar is not None:
@@ -194,18 +188,14 @@ def make_region_stack(
         crs=region["crs"],
         coordinate_suffix="_lr",
     )
-
-    climate = surgedetection.inputs.climate.warp_to_grid(lowres_raster_params)
-    
     # Read RGI outlines which will be rasterized
     rgi = surgedetection.inputs.rgi.read_rgi6(region["O1_regions"])
     rgi = rgi[rgi.intersects(region.geometry)].reset_index().to_crs(raster_params.crs)
     # Index 0 will be "no glacier", so all of them are incremented by 1
     rgi.index += 1
 
-    spatial_coords = raster_params.xarray_coords()
     # Define the outgoing base-level attributes of the dataset
-    attrs: dict[Hashable, Any] = {"bounding_box": raster_params.bounding_box(),} | region[
+    attrs: dict[Hashable, Any] = {"bounding_box": raster_params.bounding_box()} | region[
         ["name", "region_id", "label", "rgi_regions", "n_glaciers", "glacier_area", "height_px", "width_px", "crs_epsg"]
     ].to_dict()
 
@@ -218,12 +208,12 @@ def make_region_stack(
                 out_shape=raster_params.shape(),
                 transform=raster_params.transform,
             ),
-            coords=spatial_coords,
+            coords=raster_params.xarray_coords(),
             name="rgi_rasterized",
         ),
         # A mapping from the rgi_rasterized indices to rgi_ids
         xr.DataArray(rgi.index, coords=[("rgi_id", rgi["RGIId"])], name="rgi_index"),
-        climate
+        surgedetection.inputs.climate.warp_to_grid(lowres_raster_params)
     ])
 
     # Add rounded bounding boxes for each glacier, for simpler fast evaluation of single glaciers
@@ -238,6 +228,7 @@ def make_region_stack(
     with tempfile.TemporaryDirectory() as temp_dir_str:
         # temp_dir = tempfile.TemporaryDirectory()
         temp_dir_filepath = Path(temp_dir_str)
+        temp_dir_filepath = Path("temp/")
 
         # Start making a filepaths list containing all separate nc files (to combine further down in open_mfdataset)
         filepaths = [temp_dir_filepath.joinpath("base.nc")]

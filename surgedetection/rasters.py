@@ -12,6 +12,7 @@ import rasterio as rio
 from affine import Affine
 from pyproj import CRS
 from tqdm import tqdm
+from rasterio.warp import Resampling
 
 import surgedetection.cache
 
@@ -34,6 +35,46 @@ def create_warped_vrt(filepath: Path | str, vrt_filepath: Path | str, out_crs: s
     del ds
     del vrt
 
+
+
+def build_vrt_new(
+     filepaths: Path | str | list[Path | str],
+     vrt_filepath: Path,
+     dst_bounds: list[float] | None = None,
+     dst_res: float | tuple[float, float] | None = None,
+     src_crs: CRS | int | str = None,
+     dst_crs: CRS | int | str = None,
+     resampling: Resampling = Resampling.bilinear,
+     multithread: bool = True) -> None:
+    from osgeo import gdal
+
+    if isinstance(filepaths, Path):
+        filepaths = [str(filepaths)]
+    elif isinstance(filepaths, str):
+        filepaths = [filepaths]
+
+    crs_s = [src_crs, dst_crs]
+    for i, crs in enumerate(crs_s):
+        if isinstance(crs, int):
+            crs_s[i] = CRS.from_epsg(crs).to_wkt()
+        elif isinstance(crs, CRS):
+            crs_s[i] = crs.to_wkt()
+
+    if isinstance(dst_res, float) or dst_res is None:
+        dst_res = [dst_res] * 2
+    
+    gdal.Warp(
+        str(vrt_filepath),
+        list(map(str, filepaths)),
+        outputBounds=dst_bounds,
+        format="VRT",
+        srcSRS=crs_s[0],
+        dstSRS=crs_s[1],
+        multithread=multithread,
+        xRes=dst_res[0],
+        yRes=dst_res[1],
+        resampleAlg=rio.warp.Resampling.bilinear
+    )
 
 def build_vrt(filepaths: list[Path | str], vrt_filepath: Path, gdal_kwargs: dict[str, str] | None = None) -> None:
     from osgeo import gdal
@@ -187,38 +228,110 @@ class RasterParams:
         ]
         return coords
 
+# class RasterInput:
+#     def __init__(
+#         self,
+#         source: str,
+#         start_date: pd.Timestamp,
+#         end_date: pd.Timestamp,
+#         kind: str,
+#         region: str,
+#         filepath: Path | str,
+#         multi_source: bool = False,
+#         multi_date: bool = False,
+#         time_prefix: str | None = None,
+#         raster_params: RasterParams | None = None,
+#         band_n: int = 1,
+#     ):
+#         self.source = source
+#         self.start_date = start_date
+#         self.end_date = end_date
+#         self.kind = kind
+#         self.region = region
+#         self.filepath = Path(filepath)
+#         self.multi_date = multi_date
+#         self.multi_source = multi_source
+#         self.time_prefix = time_prefix or kind
+#         self.raster_params = raster_params
+#         self.band_n = band_n
+
+#     def __str__(self) -> str:
+#         return "\n".join(
+#             (
+#                 f"RasterInput: {self.kind} from {self.source}",
+#                 f"Dates: {self.start_date}-{self.end_date}",
+#                 f"Region: {self.region}",
+#                 f"{self.multi_date=}, {self.multi_source=}",
+#             )
+#         )
+
+
 class RasterInput:
     def __init__(
         self,
-        source: str,
-        start_date: pd.Timestamp,
-        end_date: pd.Timestamp,
-        kind: str,
+        sources: str | list[str],
+        start_dates: pd.Timestamp | list[pd.Timestamp],
+        end_dates: pd.Timestamp | list[pd.Timestamp],
+        kinds: str | list[str],
         region: str,
         filepath: Path | str,
         multi_source: bool = False,
         multi_date: bool = False,
-        time_prefix: str | None = None,
-        raster_params: RasterParams | None = None,
-    ):
-        self.source = source
-        self.start_date = start_date
-        self.end_date = end_date
-        self.kind = kind
+        band_numbers: int | list[int] | None = None):
+
+        lists = list(filter(lambda l: isinstance(l[1], list), [("sources", sources), ("start_dates", start_dates), ("end_dates", end_dates), ("kinds", kinds)]))
+        keys_with_lists = [l[0] for l in lists]
+        if len(lists) > 0:
+            list_lengths = [len(o) for k, o in lists]
+
+            if any(all(s in keys_with_lists and s2 in keys_with_lists for s in ["sources", "kinds"]) for s2 in ["start_date", "end_date"]):
+                raise ValueError("Multi-source/kind and multi-date inputs are currently not supported")
+
+            if band_numbers is None:
+                band_numbers = list(range(1, max(list_lengths) + 1)) 
+
+            for key, value in lists:
+                if key in ["start_dates", "end_dates"]:
+                    multi_date = True
+
+                elif key in ["sources"]:
+                    multi_source = True
+            
+            first = list_lengths[0]
+            for i, length in enumerate(list_lengths[1:], start=1):
+                if first[1] != length[1]:
+                    raise ValueError(f"Length of {first[0]} is inconsistent with {length[0]}")
+        else:
+            band_numbers = [1]
+
+        if "kinds" not in keys_with_lists:
+            kinds = [kinds]
+        if "sources" not in keys_with_lists:
+            sources = [sources]
+        if "end_dates" not in keys_with_lists:
+            end_dates = [end_dates]
+        if "start_dates" not in keys_with_lists:
+            start_dates = [start_dates]
+            
+
+        self.sources: list[str] = sources
+        self.start_dates: list[pd.Timestamp] = start_dates
+        self.end_dates: list[pd.Timestamp] = end_dates
+        self.kinds: list[str] = kinds
         self.region = region
         self.filepath = Path(filepath)
-        self.multi_date = multi_date
         self.multi_source = multi_source
-        self.time_prefix = time_prefix or kind
-        self.raster_params = raster_params
+        self.multi_date = multi_date
+        self.band_numbers: list[int] = band_numbers
+
 
     def __str__(self) -> str:
         return "\n".join(
             (
-                f"RasterInput: {self.kind} from {self.source}",
-                f"Dates: {self.start_date}-{self.end_date}",
+                f"RasterInput: {self.kinds} from {self.sources}",
+                f"Dates: {self.start_dates}-{self.end_dates}",
                 f"Region: {self.region}",
-                f"{self.multi_date=}, {self.multi_source=}",
+                f"{self.multi_date=}, {self.multi_source=}, {self.band_numbers=}",
             )
         )
 

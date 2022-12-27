@@ -47,6 +47,28 @@ def get_sentinel1_diff_files(region: pd.Series) -> list[RasterInput]:
 
         with rio.open(filepath) as raster:
             band_names = raster.descriptions
+        
+        sources  = []
+        band_ns = []
+        for i, band_name in enumerate(band_names, start=1):
+            if band_name == "mean":
+                continue
+            sources.append(band_name)
+            band_ns.append(i)
+
+        rasters.append(RasterInput(
+            sources=sources,
+            start_dates=start_date,
+            end_dates=end_date,
+            kinds="sar_backscatter_diff",
+            region=region_id,
+            filepath=filepath,
+            multi_source=True,
+            multi_date=True,
+            band_numbers=band_ns
+        ))
+
+        continue
         for i, band_name in enumerate(band_names, start=1):
             if band_name == "mean":
                 continue

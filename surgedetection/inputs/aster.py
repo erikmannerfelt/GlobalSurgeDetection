@@ -36,15 +36,14 @@ def get_files(region: pd.Series) -> list[RasterInput]:
         for kind in ["dhdt", "dhdt_err"]:
             rasters.append(
                 RasterInput(
-                    source="hugonnet-etal-2021",
-                    start_date=start_date,
-                    end_date=end_date,
-                    kind=kind,
+                    sources="hugonnet-etal-2021",
+                    start_dates=start_date,
+                    end_dates=end_date,
+                    kinds=kind,
                     region=rgi_region,
                     filepath=load_tarfile(filepath, crs=region["crs"], pattern=".*" + kind + r"\.tif"),
                     multi_date=True,
                     multi_source=False,
-                    time_prefix="dhdt",
                 )
             )
 

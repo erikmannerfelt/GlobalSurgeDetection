@@ -33,29 +33,27 @@ def get_files(region: pd.Series) -> list[RasterInput]:
         start_date = pd.Timestamp(year=year, month=1, day=1)
         end_date = pd.Timestamp(year=year, month=12, day=31, hour=23, minute=59, second=59)
 
-        for variable in variables:
-            variable_path = f"NETCDF:{filepath}:{variable}"
+        variable_paths = [f"NETCDF:{filepath}:{variable}" for variable in variables]
 
-            cache_path = surgedetection.cache.get_cache_name(
-                "itslive-read_files", [itslive_region, year, variable, DATA_DIR]
-            ).with_suffix(".vrt")
+        cache_path = surgedetection.cache.get_cache_name(
+            f"itslive-read_files-{itslive_region}-{year}", [variables, DATA_DIR]
+        ).with_suffix(".vrt")
 
-            if not cache_path.is_file():
-                surgedetection.rasters.create_warped_vrt(variable_path, cache_path, out_crs=region["crs"].to_wkt())
+        if not cache_path.is_file():
+            surgedetection.rasters.build_vrt(variable_paths, cache_path, gdal_kwargs={"separate": True})
 
-            rasters.append(
-                RasterInput(
-                    source="its-live",
-                    start_date=start_date,
-                    end_date=end_date,
-                    kind=variables[variable],
-                    region=itslive_region,
-                    filepath=cache_path,
-                    multi_source=False,
-                    multi_date=True,
-                    time_prefix=variables["v"],
-                )
+        rasters.append(
+            RasterInput(
+                sources="its-live",
+                start_dates=start_date,
+                end_dates=end_date,
+                kinds=list(variables.values()),
+                region=itslive_region,
+                filepath=cache_path,
+                multi_source=False,
+                multi_date=True,
             )
+        )
 
     return rasters
 
