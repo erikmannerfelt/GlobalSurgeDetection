@@ -51,19 +51,36 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
         rgi_id = locations["monaco"]
         bounds = stack["bboxes"].sel(rgi_id=rgi_id).values.ravel()
         # Temporary to try things out
-        stack = stack.sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
+        x_slice = slice(bounds[0], bounds[2])
+        y_slice = slice(bounds[3], bounds[1])
+        stack = stack.sel(x=x_slice, x_era=x_slice, y=y_slice, y_era=y_slice)
 
-    # Average all variables by year. All as of 2022-12-24 consist of just one sample per year
-    # so this in reality is just a simpliciation of the time dimension.
-    vars_with_time = [v for v in stack.data_vars if "time" in stack[v].dims]
-    stack[vars_with_time] = stack[vars_with_time].groupby("time.year").mean().squeeze()
 
+    era_vars_with_time = [v for v in stack.data_vars if "time_era" in stack[v].dims]
+    for col in era_vars_with_time:
+        if "precipitation" in col:
+            stack[col] = stack[col].groupby("time_era.year").sum()
+        else:
+            stack[col] = stack[col].groupby("time_era.year").mean()
+
+        # Calculate the trend by just taking the mean annual difference
+        # NOTE: This naively assumes that all years are present.
+        stack[col + "_trend"] = stack[col].diff("year").mean("year")
+            
     # Remove the source dimension by averaging for each x/y/year step
     for variable in [v for v in stack.data_vars if "source" in stack[v].dims]:
         stack[variable] = stack[variable].mean("source")
 
+    # Average all variables by year. All datasets as of 2022-12-24 consist of just one sample per year
+    # so this in reality is just a simpliciation of the time dimension.
+    vars_with_time = [v for v in stack.data_vars if "time" in stack[v].dims]
+    with warnings.catch_warnings():
+        # I don't know why this warning comes up, but at this point I don't care any more!
+        warnings.filterwarnings("ignore", message="Increasing number of chunks")
+        stack[vars_with_time] = stack[vars_with_time].groupby("time.year").mean("time").squeeze()
+
     # Source and time (replaced by year) are now empty, so they can be dropped
-    stack = stack.drop_dims(["source", "time"])
+    stack = stack.drop_dims(["source", "time", "time_era"])
 
     # Generate a glacier mask (True on glaciers)
     stack["glacier_mask"] = stack["rgi_rasterized"] > 0
@@ -198,7 +215,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
     if (not force_redo) and cache_path.is_file():
         return xr.open_dataset(cache_path)
         # return xr.open_zarr(cache_path)
-    stack = interpret_stack(region_id=region_id)
+    stack = interpret_stack(region_id=region_id).drop_vars(["solid_precipitation_trend", "total_precipitation_trend", "air_temperature_trend"])
 
     attrs = stack.attrs.copy()
     if "creation_date" in attrs:
@@ -218,7 +235,17 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         # Temporary to try things out
         stack = stack.sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
 
-    stack = stack.drop_vars(["bboxes", "coordinate", "rgi_id", "rgi_index"])
+
+    mid_x = stack["bboxes"].sel(coordinate=["xmin", "xmax"]).mean("coordinate")
+    mid_y = stack["bboxes"].sel(coordinate=["ymin", "ymax"]).mean("coordinate")
+
+    era_vars = [v for v in stack.data_vars if "x_era" in stack[v].dims]
+    era = stack[era_vars].sel(x_era=mid_x, y_era=mid_y, method="nearest").reset_coords(drop=True).transpose()
+
+    for variable in era_vars:
+        era[variable + "_trend"] = era[variable].diff("year").groupby("rgi_id").mean("year")
+
+    stack = stack.drop_vars(["bboxes", "coordinate", "rgi_id", "rgi_index", "x_era", "y_era"] + era_vars)
 
     stack = stack.stack(xy=["x", "y"]).swap_dims({"xy": "rgi_rasterized"}).reset_coords(drop=True)
     stack = stack.where(stack["rgi_rasterized"] > 0, drop=True)
@@ -239,6 +266,8 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
             stack.chunk({"rgi_rasterized": 256**2, "year": 10}).to_zarr(stack_path, compute=True)
 
             stack = xr.open_zarr(stack_path)
+        else:
+            stack = stack.chunk({"rgi_rasterized": 256**2, "year": 10})
 
         err_cols = [v for v in stack.data_vars if "_err" in v]  # type: ignore
         count_cols = [v.replace("_err", "_count") for v in err_cols]  # type: ignore
@@ -247,7 +276,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         files = []
 
         with tqdm(total=len(scopes)) as progress_bar:
-            for scope in scopes:
+            for scope in scopes[:1]:
                 start_time = time.time()
                 filename = Path(temp_dir).joinpath(f"{scope}.zarr")
                 progress_bar.set_description(f"{scope}: Starting +{time.time() - start_time:.1f} s")
@@ -277,7 +306,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         aggs["rgi_rasterized"] = rgi_ids.loc[aggs["rgi_rasterized"].values].values
         aggs["rgi_rasterized"] = aggs["rgi_rasterized"].astype(str)
         aggs["area"] = aggs["area"] * (CONSTANTS.pixel_size ** 2)
-        aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope")
+        aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope").combine_first(era)
 
         attrs["creation_date"] = surgedetection.utilities.now_str()
         aggs.attrs = attrs.copy()

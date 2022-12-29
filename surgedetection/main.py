@@ -108,41 +108,75 @@ def process_raster(
             
     if np.count_nonzero(np.isfinite(data)) == 0:
         progress_bar.update()
-        return None
+        return []
             
     coords = raster_params.xarray_coords()
     arrs = {}
-    out_shape = data.shape
-    if len(raster_input.kinds) > 1:
+    out_shape = list(data.shape)
+    if len(raster_input.kinds) > 1 or len(raster_input.sources) > 1:
         out_shape = out_shape[:2]
         
+    # If 
     if raster_input.multi_date:
         coords.append(("time", np.array([raster_input.end_dates]).ravel()))
-        out_shape = out_shape + (1,)
+        out_shape = out_shape + [1,]
     if raster_input.multi_source:
         coords.append(("source", np.array([raster_input.sources]).ravel()))
-        out_shape = out_shape + (1,)
+        out_shape = out_shape + [1,]
 
-    if (len(raster_input.sources) > 1) and raster_input.multi_date:
-        out_shape = data.shape[:2] + (1,) + (data.shape[2],)
-    elif len(raster_input.end_dates) > 1 and raster_input.multi_source:
-        out_shape = data.shape + (1,)
+    #if (len(raster_input.sources) > 1) and raster_input.multi_date:
+    #   out_shape = data.shape[:2] + (1,) + (data.shape[2],)
+    if len(raster_input.end_dates) > 1 and raster_input.multi_source:
+        out_shape = data.shape + [1,]
 
+    if len(raster_input.kinds) > 1:
+        out_shape[2] = 1
+
+    filenames= []
     for i, kind in enumerate(raster_input.kinds):
-        arr = data if len(raster_input.kinds) == 1 else data[:, :, i]
-        arrs[kind] = xr.DataArray(
-            arr.reshape(out_shape),
-            coords=coords,
-            name=kind,
-            attrs = {
-                "source": "variable" if raster_input.multi_source else raster_input.sources[0],
-                "start_date": "variable" if raster_input.multi_date else raster_input.start_dates[0].isoformat(),
-                "end_date": "variable" if raster_input.multi_date else raster_input.end_dates[0].isoformat(),
-            }
-        )
+        for j, source in enumerate(raster_input.sources):
+            if len(raster_input.kinds) > 1:
+                arr = data[:, :, i]
+                newcoords=coords
+            elif len(raster_input.sources) > 1:
+                arr = data[:, :, j]
+                newcoords=coords.copy()
+                newcoords[-1] = ("source", newcoords[-1][1][[j]])
+            else:
+                newcoords=coords
+                arr = data
+            
+            #arr = data if len(raster_input.kinds) == 1 else data[:, :, i]
+            #print(kind, source, out_shape,data.shape, raster_input.multi_source) 
+            arr = xr.DataArray(
+                arr.reshape(out_shape),
+                coords=newcoords,
+                name=kind,
+                attrs = {
+                    "source": "variable" if raster_input.multi_source else raster_input.sources[0],
+                    "start_date": "variable" if raster_input.multi_date else raster_input.start_dates[0].isoformat(),
+                    "end_date": "variable" if raster_input.multi_date else raster_input.end_dates[0].isoformat(),
+                }
+            )
+
+            name = "-".join("".join(map(str, v)) for v in [[kind],[source], raster_input.start_dates, raster_input.end_dates]).replace(" ", "").replace(".", "").replace(":", "")
+            #filename = temp_dir_filepath.joinpath(hashlib.sha1(str(raster_input.filepath).encode()).hexdigest()).with_suffix(
+            #    ".nc"
+            #)
+            filename = temp_dir_filepath.joinpath(name).with_suffix(".nc")
+            arr.chunk({"x": 256, "y": 256}).to_netcdf(filename)
+            filenames.append(filename)
+            arr.close()
+
+    if progress_bar is not None:
+        progress_bar.update()
+    return filenames
 
                
     arr = xr.Dataset(arrs)
+
+    if raster_input.multi_source:
+        arr = arr.sortby("source")
         
 
     if in_memory:
@@ -151,13 +185,7 @@ def process_raster(
         return arr
 
 
-    filename = temp_dir_filepath.joinpath(hashlib.sha1(str(raster_input.filepath).encode()).hexdigest()).with_suffix(
-        ".nc"
-    )
-    arr.to_netcdf(filename)
 
-    if progress_bar is not None:
-        progress_bar.update()
 
     return filename
 
@@ -186,7 +214,7 @@ def make_region_stack(
         xres=CONSTANTS.lowres_pixel_size,
         yres=CONSTANTS.lowres_pixel_size,
         crs=region["crs"],
-        coordinate_suffix="_lr",
+        coordinate_suffix="_era",
     )
     # Read RGI outlines which will be rasterized
     rgi = surgedetection.inputs.rgi.read_rgi6(region["O1_regions"])
@@ -245,20 +273,19 @@ def make_region_stack(
 
         with tqdm(total=len(raster_inputs), desc="Reprojecting datasets", smoothing=0) as progress_bar:
             for raster_input in raster_inputs:
-                result = process_raster(
+                filepaths += process_raster(
                     raster_input=raster_input,
                     raster_params=raster_params,
                     temp_dir_filepath=temp_dir_filepath,
                     n_threads=n_threads,
                     progress_bar=progress_bar,
                 )
-                if result is not None:
-                    filepaths.append(result)
 
-        chunks = {"x": 256, "y": 256, "time": 1}
+        chunks = {"x": 128, "y": 128, "time": 1, "source": 1}
+        out_chunks = {"x": 256, "y": 256, "time": 1, "source": 1}
 
         with dask.config.set({"array.slicing.split_large_chunks": True}):
-            data = xr.open_mfdataset(filepaths, chunks="auto", parallel=True)
+            data = xr.open_mfdataset(filepaths, chunks=chunks, parallel=False)
             # Avoid complaining about this being an object array
             for coord in ["source", "rgi_id"]:
                 if coord in data.coords:
@@ -301,10 +328,10 @@ def make_region_stack(
 
             compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
 
-            task = data.chunk(chunks).to_zarr(
+            task = data.chunk(out_chunks).to_zarr(
                 cache_path, mode="w", encoding={v: {"compressor": compressor} for v in data.variables}, compute=False
             )
-            with TqdmCallback(desc=f"Writing region {region['label']}"):
+            with TqdmCallback(desc=f"Writing region {region['label']}", smoothing=0.05):
                 task.compute()
 
         del data

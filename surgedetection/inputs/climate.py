@@ -85,7 +85,7 @@ def warp_to_grid(raster_params: RasterParams) -> xr.Dataset:
 
     times, vrts = get_era5_vrts(raster_params.crs)
 
-    coords = [("time", np.array(times, dtype="datetime64[ns]"))] + raster_params.xarray_coords()
+    coords = [("time_era", np.array(times, dtype="datetime64[ns]"))] + raster_params.xarray_coords()
 
     data = {}
         
