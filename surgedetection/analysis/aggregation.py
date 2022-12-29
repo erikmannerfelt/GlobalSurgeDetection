@@ -208,7 +208,7 @@ def interpret_stack(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fals
     return xr.open_zarr(cache_filepath)  # type: ignore
 
 
-def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, save_chunk_size: int = 100) -> xr.Dataset:
+def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = False, conserve_memory: bool = False) -> xr.Dataset:
 
     cache_path = surgedetection.cache.get_cache_name(f"aggregate_region-{region_id}", extension=".nc")
 
@@ -236,16 +236,17 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
         stack = stack.sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
 
 
-    mid_x = stack["bboxes"].sel(coordinate=["xmin", "xmax"]).mean("coordinate")
-    mid_y = stack["bboxes"].sel(coordinate=["ymin", "ymax"]).mean("coordinate")
 
     era_vars = [v for v in stack.data_vars if "x_era" in stack[v].dims]
+    mid_x = stack["bboxes"].sel(coordinate=["xmin", "xmax"]).mean("coordinate")
+    mid_y = stack["bboxes"].sel(coordinate=["ymin", "ymax"]).mean("coordinate")
     era = stack[era_vars].sel(x_era=mid_x, y_era=mid_y, method="nearest").reset_coords(drop=True).transpose()
-
-    for variable in era_vars:
-        era[variable + "_trend"] = era[variable].diff("year").groupby("rgi_id").mean("year")
-
     stack = stack.drop_vars(["bboxes", "coordinate", "rgi_id", "rgi_index", "x_era", "y_era"] + era_vars)
+    for variable in era_vars.copy():
+        trend_name = variable + "_trend"
+        era[trend_name] = era[variable].diff("year").groupby("rgi_id").mean("year")
+        era_vars.append(trend_name)
+
 
     stack = stack.stack(xy=["x", "y"]).swap_dims({"xy": "rgi_rasterized"}).reset_coords(drop=True)
     stack = stack.where(stack["rgi_rasterized"] > 0, drop=True)
@@ -257,7 +258,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
 
-        if True:
+        if False:
             for variable in stack.variables:
                 stack[variable].attrs.clear()
                 stack[variable].encoding.update(compressor=zarr.Blosc(cname="zstd", clevel=3, shuffle=2))
@@ -275,38 +276,64 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
 
         files = []
 
-        with tqdm(total=len(scopes)) as progress_bar:
-            for scope in scopes[:1]:
-                start_time = time.time()
-                filename = Path(temp_dir).joinpath(f"{scope}.zarr")
-                progress_bar.set_description(f"{scope}: Starting +{time.time() - start_time:.1f} s")
-                filtered = stack if scope == "glacier_mask" else stack.where(stack[scope])
-                progress_bar.set_description(f"{scope}: Filtered +{time.time() - start_time:.1f} s")
-                scoped_agg = filtered.groupby("rgi_rasterized").mean("rgi_rasterized").drop_vars(scopes)
-                progress_bar.set_description(f"{scope}: Grouped1 +{time.time() - start_time:.1f} s")
+        def aggregate(grouped, progress_bar):
 
+            scoped_aggs = []
+            for scope in scopes:
+                filtered = grouped if scope == "glacier_mask" else grouped.where(grouped[scope])
+                scoped_agg = filtered.mean("rgi_rasterized").drop_vars(scopes)
                 cols_to_count = err_cols + [scope]
-                pixel_counts = filtered[cols_to_count].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
-                progress_bar.set_description(f"{scope}: Grouped2 +{time.time() - start_time:.1f} s")
+                pixel_counts = filtered[cols_to_count].notnull().sum("rgi_rasterized")
                 scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))[count_cols]
                 scoped_agg["area"] = pixel_counts[scope]
+                scoped_aggs.append(scoped_agg.expand_dims({"scope": np.array([scope.replace("_mask", "")], dtype=str)}))
 
-                progress_bar.set_description(f"{scope}: To netcdf +{time.time() - start_time:.1f} s")
-                scoped_agg.expand_dims({"scope": np.array([scope.replace("_mask", "")], dtype=str)}).to_zarr(filename)
-                filtered.close()
-                scoped_agg.close()
-                # with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
 
-                progress_bar.set_description(f"{scope}: Done +{time.time() - start_time:.1f} s")
-                files.append(filename)
-                progress_bar.update()
-        stack.close()
+            progress_bar.update()
+            return xr.concat(scoped_aggs, "scope")
 
-        aggs = xr.open_mfdataset(files, concat_dim="scope", combine="nested", engine="zarr")
-        aggs["rgi_rasterized"] = rgi_ids.loc[aggs["rgi_rasterized"].values].values
+        with tqdm(total=np.unique(stack["rgi_rasterized"].values).shape[0], desc="Creating aggregates", smoothing=0) as progress_bar:
+            aggs = stack.groupby("rgi_rasterized").map(aggregate, progress_bar=progress_bar)
+
+        #print(aggs)
+
+        #return
+                
+
+        # with tqdm(total=len(scopes)) as progress_bar:
+        #     for scope in scopes[:1]:
+        #         start_time = time.time()
+        #         filename = Path(temp_dir).joinpath(f"{scope}.zarr")
+        #         progress_bar.set_description(f"{scope}: Starting +{time.time() - start_time:.1f} s")
+        #         filtered = stack if scope == "glacier_mask" else stack.where(stack[scope])
+        #         progress_bar.set_description(f"{scope}: Filtered +{time.time() - start_time:.1f} s")
+        #         scoped_agg = filtered.groupby("rgi_rasterized").mean("rgi_rasterized").drop_vars(scopes)
+        #         progress_bar.set_description(f"{scope}: Grouped1 +{time.time() - start_time:.1f} s")
+
+        #         cols_to_count = err_cols + [scope]
+        #         pixel_counts = filtered[cols_to_count].notnull().groupby("rgi_rasterized").sum("rgi_rasterized")
+        #         progress_bar.set_description(f"{scope}: Grouped2 +{time.time() - start_time:.1f} s")
+        #         scoped_agg[count_cols] = pixel_counts.rename_vars(dict(zip(err_cols, count_cols)))[count_cols]
+        #         scoped_agg["area"] = pixel_counts[scope]
+
+        #         progress_bar.set_description(f"{scope}: To netcdf +{time.time() - start_time:.1f} s")
+        #         scoped_agg.expand_dims({"scope": np.array([scope.replace("_mask", "")], dtype=str)}).to_zarr(filename)
+        #         filtered.close()
+        #         scoped_agg.close()
+        #         # with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
+
+        #         progress_bar.set_description(f"{scope}: Done +{time.time() - start_time:.1f} s")
+        #         files.append(filename)
+        #         progress_bar.update()
+        # stack.close()
+
+        #aggs = xr.open_mfdataset(files, concat_dim="scope", combine="nested", engine="zarr")
+        rgi_id_values = rgi_ids.loc[aggs["rgi_rasterized"].values].values
+        aggs["rgi_rasterized"] = rgi_id_values
         aggs["rgi_rasterized"] = aggs["rgi_rasterized"].astype(str)
         aggs["area"] = aggs["area"] * (CONSTANTS.pixel_size ** 2)
-        aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope").combine_first(era)
+        aggs = aggs.rename({"rgi_rasterized": "rgi_id"}).transpose("rgi_id", "year", "scope")
+        aggs[era_vars] = era.sel(rgi_id=rgi_id_values)
 
         attrs["creation_date"] = surgedetection.utilities.now_str()
         aggs.attrs = attrs.copy()
@@ -317,7 +344,7 @@ def aggregate_region(region_id: str = "REGN79E021X24Y05", force_redo: bool = Fal
 
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         task = aggs.to_netcdf(cache_path, compute=False)
-        with TqdmCallback(desc=f"Aggregating region {attrs['label']}"):
+        with TqdmCallback(desc=f"Aggregating region {attrs['label']}", smoothing=0.05):
             task.compute()
         del task
 
