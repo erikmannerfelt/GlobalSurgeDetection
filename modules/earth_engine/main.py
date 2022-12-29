@@ -27,6 +27,17 @@ assert FILE_PATTERN.match("REGN76W115X01Y01-MelvilleIsland_2021-2022.tif") is no
 
 
 def get_current_rasters(output_dir: Path = OUTPUT_DIR) -> list[str]:
+    labels = []
+    for filepath in output_dir.glob("*.tif"):
+        if FILE_PATTERN.match(filepath.name) is None:
+            continue
+
+        if "0000000000" in filepath.stem:
+            labels.append(filepath.stem[:-22])
+        else:
+            labels.append(filepath.stem)
+    
+    return list(set(labels))
     return [f.stem for f in output_dir.glob("*.tif") if FILE_PATTERN.match(f.name)]
 
 
@@ -323,6 +334,7 @@ def main(max_concurrent_processes: int = 10) -> None:
     print(f"Found {len(downloaded_names)} (out of {len(all_sar_names)}) downloaded files")
 
     non_downloaded_names = diff_list(all_sar_names, downloaded_names)
+    non_downloaded_names.sort()
 
     if len(non_downloaded_names) == 0:
         print("All rasters downloaded")
