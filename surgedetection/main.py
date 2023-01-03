@@ -5,6 +5,7 @@ from collections.abc import Hashable
 from pathlib import Path
 from typing import Any, overload, Literal
 import random
+import warnings
 
 import dask
 import numpy as np
@@ -285,7 +286,10 @@ def make_region_stack(
         out_chunks = {"x": 256, "y": 256, "time": 1, "source": 1}
 
         with dask.config.set({"array.slicing.split_large_chunks": True}):
-            data = xr.open_mfdataset(filepaths, chunks=chunks, parallel=False)
+            with warnings.catch_warnings():
+                # I don't know why this warning comes up, but at this point I don't care any more!
+                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                data = xr.open_mfdataset(filepaths, chunks=chunks, parallel=False)
             # Avoid complaining about this being an object array
             for coord in ["source", "rgi_id"]:
                 if coord in data.coords:
