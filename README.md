@@ -1,4 +1,7 @@
 
+# Surge inventories
+- https://zenodo.org/record/5524861
+
 # Downloading the data
 1. In `modules/earth_engine`, the Google Earth Engine scripts reside. They are separated from the rest of the repo because of all the extra dependencies that are required.
 2. ERA5 data download requires a `~/.cdsapirc` file with credentials. [See the package website for further information.](https://github.com/ecmwf/cdsapi)

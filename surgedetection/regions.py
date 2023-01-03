@@ -88,8 +88,6 @@ def generate_safe_wgs_bbox(bounds: list[float], crs: pyproj.CRS, resolution: int
 def make_glacier_regions(buffer: float = 5000.0, mod: float = 1000.0, area_threshold: float = 1.6) -> gpd.GeoDataFrame:
     manual_entries = parse_manual_glacier_zones()  # .query("name == 'NE Russia'")
 
-    rgi_o2_regions = surgedetection.inputs.rgi.read_rgi6_regions()
-
     cache_path = surgedetection.cache.get_cache_name(
         "make_glacier_regions", [buffer, mod, area_threshold], extension="geojson"
     )
@@ -98,6 +96,7 @@ def make_glacier_regions(buffer: float = 5000.0, mod: float = 1000.0, area_thres
         zones = gpd.read_file(cache_path)
         zones["crs"] = zones["crs_epsg"].apply(pyproj.CRS.from_epsg)
         return zones
+    rgi_o2_regions = surgedetection.inputs.rgi.read_rgi6_regions()
 
     # All glaciers with fewer than 4x4 pixels are excluded (400 * 400 m == 1.6 km²)
     rgi = surgedetection.inputs.rgi.read_all_rgi6(query=f"Area > {area_threshold}")
