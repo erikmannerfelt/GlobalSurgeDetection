@@ -2,6 +2,7 @@ import urllib
 import warnings
 from pathlib import Path
 import asyncio
+import shutil
 
 import pandas as pd
 import rasterio as rio
@@ -179,6 +180,7 @@ def process_tile(filename: Path = Path("vel_tile0_svalbard.zarr"), region: pd.Se
     print(out)
 
 def process_raw_tiles(data: xr.Dataset,out_filepath: Path, region: pd.Series | str = "REGN79E021X24Y05"):
+    warnings.simplefilter("error")
     if isinstance(region, str):
         region = surgedetection.regions.make_glacier_regions().query(f"region_id == '{region}'").iloc[0]
 
@@ -196,7 +198,13 @@ def process_raw_tiles(data: xr.Dataset,out_filepath: Path, region: pd.Series | s
         xsize=src_xres, 
         ysize=src_yres
     )
-    dst_transform = rio.transform.from_bounds(*region[["xmin_proj", "ymin_proj", "xmax_proj", "ymax_proj", "width_px", "height_px"]])
+    #dst_transform = rio.transform.from_bounds(*region[["xmin_proj", "ymin_proj", "xmax_proj", "ymax_proj", "width_px", "height_px"]])
+    dst_transform = rio.transform.from_origin(
+        west=region["xmin_proj"],
+        north=region["ymax_proj"],
+        xsize=CONSTANTS.pixel_size,
+        ysize=CONSTANTS.pixel_size,
+    )
     dst_crs = region["crs"]
     out_params = surgedetection.rasters.RasterParams(transform=dst_transform, width=region["width_px"], height=region["height_px"], crs=dst_crs)
 
@@ -207,13 +215,15 @@ def process_raw_tiles(data: xr.Dataset,out_filepath: Path, region: pd.Series | s
         "v_error": "ice_velocity_err",
     }
 
-    with TqdmCallback(desc="Making yearly mosaics.", smoothing=0):
-        data = data.compute()
+    print("Sending compute task" + surgedetection.utilities.now_str())
+    #with TqdmCallback(desc="Making yearly mosaics.", smoothing=0):
+    #    data = data.compute()
     arrs = {}
     for variable in ["v", "v_error"]:
         destination = np.empty(out_shape, dtype="float32") + np.nan
 
-        src_arr = data[variable].to_numpy()
+        with TqdmCallback(desc=f"Loading {variable}", smoothing=0):
+            src_arr = data[variable].to_numpy()
         rasterio.warp.reproject(
             src_arr,
             destination=destination,
@@ -233,20 +243,65 @@ def process_raw_tiles(data: xr.Dataset,out_filepath: Path, region: pd.Series | s
     out = xr.Dataset(arrs)
     out.attrs = attrs
 
+    if out_filepath.is_dir():
+        shutil.rmtree(out_filepath)
+    print("Saving" + surgedetection.utilities.now_str())
     out.to_zarr(out_filepath, encoding={v: {"compressor": zarr.Blosc(cname="zstd", clevel=3, shuffle=2)} for v in out.data_vars})
 
     print(out)
 
 def get_tiles(region: pd.Series | str = "REGN79E021X24Y05"):
+    warnings.simplefilter("error")
 
     if isinstance(region, str):
         region = surgedetection.regions.make_glacier_regions().query(f"region_id == '{region}'").iloc[0]
 
     tile_meta = get_tile_metadata()
-    tile_meta = tile_meta[tile_meta.intersects(region.geometry)]
+    tile_meta = tile_meta[tile_meta.intersects(region.geometry) | tile_meta.overlaps(region.geometry)]
+    final_cache_path = surgedetection.cache.get_cache_name(f"itslive-get_tiles/yearly_mosaics-{region['region_id']}", args=tile_meta["zarr_url"], extension="zarr")
 
     if tile_meta.shape[0] == 0:
         return []
+
+    tiles = []
+
+    not_finished = []
+    for _, tile_m in tile_meta.iterrows():
+        cache_path = surgedetection.cache.get_cache_name(f"itslive-get_tiles/yearly_mean-{region['region_id']}", args=tile_m["zarr_url"], extension="zarr")
+        if cache_path.is_dir():
+            tiles.append(cache_path)
+        else:
+            not_finished.append((cache_path, tile_m))
+            
+    
+    for cache_path, tile_m in tqdm(not_finished, desc=f"Downloading ITS-LIVE data for region {region['region_id']}", disable=len(not_finished) < 2):
+        cache_path = surgedetection.cache.get_cache_name(f"itslive-get_tiles/yearly_mean-{region['region_id']}", args=tile_m["zarr_url"], extension="zarr")
+
+        if not cache_path.is_dir():
+            tile = xr.open_zarr(tile_m["zarr_url"])[["v", "v_error"]]
+
+            tile2 = tile.groupby("mid_date.year").map(lambda df: df.weighted(xr.apply_ufunc(np.reciprocal, df["v_error"].where(df["v_error"] > 0), dask="allowed").fillna(0)).mean("mid_date"))
+            tile2.attrs = tile.attrs.copy()
+            for variable in tile.data_vars:
+                tile2[variable].attrs = tile[variable].attrs.copy()
+        
+            task = tile2.to_zarr(cache_path, encoding={v: {"compressor": zarr.Blosc(cname="zstd", clevel=3, shuffle=2)} for v in tile2.data_vars}, compute=False)
+            with TqdmCallback(desc=f"Calculating {cache_path.stem}", disable=len(not_finished) > 1), warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="All-NaN slice encountered") 
+                warnings.filterwarnings("ignore", message="divide by zero encountered") 
+                task.compute()
+        tiles.append(cache_path)
+
+
+    print("Opening dataset" + surgedetection.utilities.now_str())
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Increasing number of chunks") 
+        data=xr.open_mfdataset(tiles, engine="zarr", parallel=True)
+
+    
+    process_raw_tiles(data=data, out_filepath=final_cache_path, region=region)
+
+    return
 
     files = []
     for epsg, tiles in tile_meta.groupby("epsg"):
@@ -257,13 +312,16 @@ def get_tiles(region: pd.Series | str = "REGN79E021X24Y05"):
             files.append(cache_path)
             
         data = []
-        for tile in tqdm(asyncio.run(get_multiple_zarrs(tiles["zarr_url"].values[:2])).result()):
+        for tile in tqdm(asyncio.run(get_multiple_zarrs(tiles["zarr_url"].values[:2])).result(), desc="Downloading tile metadata"):
             tile2 = tile.groupby("mid_date.year").map(lambda df: df.weighted(df["v_error"].max() * xr.apply_ufunc(np.reciprocal, df["v_error"], dask="allowed")).mean("mid_date"))
             tile2.attrs = tile.attrs.copy()
             data.append(tile2)
             
-
-        process_raw_tiles(xr.merge(data), out_filepath=cache_path, region=region)
+        print(data)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Increasing number of chunks") 
+            data = xr.merge(data)
+        process_raw_tiles(data, out_filepath=cache_path, region=region)
         files.append(cache_path)
 
 
