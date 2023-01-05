@@ -5,11 +5,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+
 import ee
 import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely.geometry
 import pydrive2.auth
 import pydrive2.drive
 import rasterio as rio
@@ -323,6 +325,111 @@ def process_sar_data(output_name: str, dry_run: bool = True) -> None:
 
 def diff_list(first: list[str], second: list[str]) -> list[str]:
     return [s for s in first if s not in second]
+
+
+def get_glacier_diffs(dry_run: bool = False):
+    glacier_name = "Strongbreen"
+    bounds = {"left": 17.09, "bottom": 77.52, "right": 18.06, "top": 77.74}
+    resolution = 50
+
+    bbox = shapely.geometry.box(bounds["left"], bounds["bottom"], bounds["right"], bounds["top"])
+
+    bounds_proj = gpd.GeoSeries(bbox, crs=4326).to_crs(32633).total_bounds
+
+    for i in range(bounds_proj.shape[0]):
+        bounds_proj[i] -= bounds_proj[i] % resolution
+        if i > 1:
+            bounds_proj[i] += resolution
+            
+
+    width = int((bounds_proj[2] - bounds_proj[0]) / resolution)
+    height = int((bounds_proj[3] - bounds_proj[1]) / resolution)
+
+    region = gpd.read_file("glacier_regions.geojson").query("name == 'Svalbard'").iloc[0]
+
+    metadata = get_scene_metadata(region, "2014-10-01", "2022-09-30", progress=True) 
+    metadata["geometry"] = metadata["geometry"].apply(shapely.geometry.Polygon)
+    metadata = metadata[metadata.contains(bbox)]
+
+    #metadata = pd.concat([metadata[metadata["resolution"] == "H"], metadata[metadata["resolution"] != "H"]]).drop_duplicates(subset=[")
+    metadata = metadata.sort_values("resolution_meters").drop_duplicates(subset=["segmentStartTime", "orbitNumber_start"]).sort_values("system:time_start")
+    metadata["polarisation"] = metadata["transmitterReceiverPolarisation"].apply(lambda l: "/".join(l))
+    #import matplotlib.pyplot as plt
+    #metadata.plot()
+    #plt.show()
+
+    diffs_i = []
+    diffs_d = []
+    for (orbit_nr, orbit, mode), meta0 in metadata.groupby(["relativeOrbitNumber_start", "orbitProperties_pass", "instrumentMode"], as_index=False):
+        for pol in ["HH", "HV", "VH", "VV"]:
+            meta1 = meta0[meta0["polarisation"].str.contains(pol)]
+
+            if meta1.shape[0] < 2:
+                continue
+
+
+            for i in range(1, meta1.shape[0]):
+                scene0 = meta1.iloc[i - 1]
+                scene1 = meta1.iloc[i]
+
+                if (scene1["system:time_start"] - scene0["system:time_start"]) > pd.Timedelta(days=50):
+                    continue
+
+                diffs_i.append(
+                    (mode,orbit,pol, pd.Interval(pd.Timestamp(scene0["system:time_start"]), pd.Timestamp(scene1["system:time_start"])))
+                )
+                diffs_d.append({
+                    "id_0": scene0["id"],
+                    "id_1": scene1["id"],
+                })
+
+
+    diffs = pd.DataFrame(data=diffs_d, index=pd.MultiIndex.from_tuples(diffs_i, names=["mode", "orbit", "pol","interval"]))
+
+    ee.Initialize()
+    sentinel1 = ee.ImageCollection("COPERNICUS/S1_GRD")
+
+
+    for (mode, year), year_diffs in diffs.groupby([diffs.index.get_level_values(0), diffs.index.get_level_values(3).mid.year]):
+
+        #if (mode == "IW" and year == 2015):
+        #    continue
+
+        out = None
+        for (_, orbit, pol, interval), scenes in year_diffs.iterrows():
+
+            name = f"{mode}_{orbit}_{pol}_{interval.left.isoformat()}_{interval.right.isoformat()}"
+
+            length_days = interval.length.total_seconds() / (3600 * 24)
+
+            scene0 = sentinel1.filter(ee.Filter.stringContains("system:index", scenes["id_0"])).select([pol]).first()
+            scene1 = sentinel1.filter(ee.Filter.stringContains("system:index", scenes["id_1"])).select([pol]).first()
+
+            diff = scene1.subtract(scene0).divide(length_days).rename([name])
+
+            if out is None:
+                out = diff
+            else:
+                out = out.addBands(diff)
+
+        label = f"{glacier_name}-diffs-{mode}-{year}"
+        job = ee.batch.Export.image.toDrive(
+            image=out,
+            description=label,
+            folder=GDRIVE_DIR,
+            dimensions=f"{width}x{height}",
+            crs=f"epsg:{region['crs_epsg']}",
+            maxPixels=1e13,
+            crsTransform=[resolution, 0, bounds_proj[0], 0, -resolution, bounds_proj[3]],
+        )
+        print(mode, year, year_diffs.shape[0])
+        #str(out)
+        if dry_run:
+            print(f"Not submitting job {dry_run=}")
+        else:
+            job.start()
+    
+
 
 
 def main(max_concurrent_processes: int = 10) -> None:
