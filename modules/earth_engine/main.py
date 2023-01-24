@@ -240,7 +240,12 @@ def process_sar_data(output_name: str, dry_run: bool = True) -> None:
 
     resolution = int((region["xmax_proj"] - region["xmin_proj"]) / region["width_px"])
 
-    data = get_scene_metadata(region, start_date, end_date)
+    try:
+        data = get_scene_metadata(region, start_date, end_date)
+    except ValueError as exception:
+        if "No objects to concatenate" in str(exception):
+            return
+        raise exception
 
     data["year"] = data["system:time_start"].dt.year
     data.loc[data["system:time_start"].dt.month >= 10, "year"] += 1
