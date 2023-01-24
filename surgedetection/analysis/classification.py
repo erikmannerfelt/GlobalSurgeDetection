@@ -57,7 +57,8 @@ def main():
         "indrebo": "RGI60-07.00294",
     }
     #rgi = ids[list(ids.keys())[-1]]
-    rgi = ids["strong"]
+    name = "arnesen"
+    rgi = ids[name]
     p_scopes = {p: f"p_{p - 5}_{p + 5}" for p in range(5, 105, 10)}
 
     agg = agg.sel(rgi_id=rgi).sel(scope=list(p_scopes.values()))#.dropna("year", how="all")
@@ -111,6 +112,7 @@ def main():
     #print(stack)
     #return
     fig = plt.figure()
+    plt.suptitle(name)
     aspect = 6
 
     variables = ["dhdt", "dhdt2", "sar_backscatter_diff", "ice_velocity", "ice_velocity2"]
