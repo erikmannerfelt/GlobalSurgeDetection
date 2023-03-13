@@ -39,6 +39,7 @@ def main():
         "bodley": "RGI60-07.00042",
         "hayes": "RGI60-07.01479",
         "hamberg": "RGI60-07.01425",
+        "nansen": "RGI60-07.00463",
         # "svalis": "RGI60-07.00440",
         "zawad": "RGI60-07.00235",
         "mendel": "RGI60-07.01396",
@@ -55,9 +56,12 @@ def main():
         "stone": "RGI60-07.01554",
         "osborneE": "RGI60-07.00476",
         "indrebo": "RGI60-07.00294",
+        "vallakra": "RGI60-07.00266",
+        "bore": "RGI60-07.00464",
     }
     #rgi = ids[list(ids.keys())[-1]]
     name = "arnesen"
+    #name = "aavats"
     rgi = ids[name]
     p_scopes = {p: f"p_{p - 5}_{p + 5}" for p in range(5, 105, 10)}
 

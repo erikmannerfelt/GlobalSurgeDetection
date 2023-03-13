@@ -327,7 +327,7 @@ def diff_list(first: list[str], second: list[str]) -> list[str]:
     return [s for s in first if s not in second]
 
 
-def get_glacier_diffs(dry_run: bool = False):
+def get_glacier_diffs(dry_run: bool = True):
     glacier_name = "Strongbreen"
     bounds = {"left": 17.09, "bottom": 77.52, "right": 18.06, "top": 77.74}
     resolution = 50
@@ -387,8 +387,11 @@ def get_glacier_diffs(dry_run: bool = False):
     diffs = pd.DataFrame(data=diffs_d, index=pd.MultiIndex.from_tuples(diffs_i, names=["mode", "orbit", "pol","interval"]))
 
     ee.Initialize()
-    sentinel1 = ee.ImageCollection("COPERNICUS/S1_GRD")
 
+    format_date = lambda date: date.isoformat(timespec="hours").replace(":", "").replace("+", "Z")
+
+    out_meta_index = []
+    out_meta_data = []
 
     for (mode, year), year_diffs in diffs.groupby([diffs.index.get_level_values(0), diffs.index.get_level_values(3).mid.year]):
 
@@ -396,14 +399,17 @@ def get_glacier_diffs(dry_run: bool = False):
         #    continue
 
         out = None
-        for (_, orbit, pol, interval), scenes in year_diffs.iterrows():
+        label = f"{glacier_name}-diffs-{mode}-{year}"
+        for i, ((_, orbit, pol, interval), scenes) in enumerate(year_diffs.iterrows(), start=1):
 
-            name = f"{mode}_{orbit}_{pol}_{interval.left.isoformat()}_{interval.right.isoformat()}"
+            name = f"{mode}_{orbit}_{pol}_{format_date(interval.left)}_{format_date(interval.right)}"
 
             length_days = interval.length.total_seconds() / (3600 * 24)
 
-            scene0 = sentinel1.filter(ee.Filter.stringContains("system:index", scenes["id_0"])).select([pol]).first()
-            scene1 = sentinel1.filter(ee.Filter.stringContains("system:index", scenes["id_1"])).select([pol]).first()
+            scene0 = ee.Image(scenes["id_0"]).select(pol)
+            scene1 = ee.Image(scenes["id_1"]).select(pol)
+
+
 
             diff = scene1.subtract(scene0).divide(length_days).rename([name])
 
@@ -412,7 +418,8 @@ def get_glacier_diffs(dry_run: bool = False):
             else:
                 out = out.addBands(diff)
 
-        label = f"{glacier_name}-diffs-{mode}-{year}"
+            out_meta_index.append((label + ".tif", i))
+            out_meta_data.append(name)
         job = ee.batch.Export.image.toDrive(
             image=out,
             description=label,
@@ -428,6 +435,10 @@ def get_glacier_diffs(dry_run: bool = False):
             print(f"Not submitting job {dry_run=}")
         else:
             job.start()
+
+    out_meta = pd.Series(out_meta_data, pd.MultiIndex.from_tuples(out_meta_index, names=["filename", "band"]))
+
+    out_meta.to_csv(f"{glacier_name}_band_metadata.csv")
     
 
 
