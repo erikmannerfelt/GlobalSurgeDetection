@@ -58,7 +58,22 @@ def get_cache_name(
 
 
 def symlink_to_output(cache_path: Path, output_name: str) -> None:
+    """
+    Symlink a path in the cache to the output directory.
 
+    For example, symlink_to_output(Path(".cache/glaciers_aaaaaaa.geojson"), "shapes/glaciers"), creates
+    the symlink $OUTPUT_DIR/shapes/glaciers.geosjon
+
+
+    Arguments
+    ---------
+    cache_path: The path to the file to symlink
+    output_name: The path with or without extension relative to the output directory
+
+    Raises
+    ------
+    ValueError: If a regular file exists where the symlink should be created.
+    """
     output_path = CONSTANTS.output_dir_path.joinpath(output_name)
 
     if len(output_path.suffix) == 0:
