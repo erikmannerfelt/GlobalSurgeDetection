@@ -153,4 +153,5 @@ def main():
         
 
     #agg.ice_velocity.plot()
+    plt.tight_layout()
     plt.show()
